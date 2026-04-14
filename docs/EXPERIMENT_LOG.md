@@ -319,3 +319,222 @@ Result:
 ```text
 5 passed
 ```
+
+## 2026-04-14: Feedback-based next policy
+
+### Decision
+
+Keep the mainline on SteerViT, and keep Franca as an ablation / appendix path for now.
+
+Do not start `warm_refseg` or `warm_cf` from the current balanced flip set as if it were a controlled benchmark. The SteerViT gate signal is promising, but the next risk is benchmark construction, not model wiring.
+
+### Why
+
+The feedback points to one real interpretation risk:
+
+```text
+balanced family count != controlled counterfactual difficulty
+```
+
+The current fallback pairing path relaxes metadata constraints:
+
+- `attr` fallback only requires different attributes, not the same object class.
+- `part` fallback only requires different parts, not the same parent object.
+- `part_attr` fallback allows both part and attribute to change at once.
+- `part_attr` strict pairing is also still too loose, because it only rejects exact `(part_name, attribute_name)` matches.
+
+This means the high `part_attr` flip accuracy may partly reflect easy negatives where both the part and attribute change, rather than genuine part-attribute disentanglement.
+
+### Next implementation step
+
+Tighten `tools/build_flipset.py` before more model experiments.
+
+Required additions:
+
+1. Pair provenance fields on every flip record:
+
+```text
+pair_origin = strict | fallback
+same_object_name
+same_parent
+same_part
+same_attribute_name
+same_attribute_type
+num_changed_fields
+changed_fields
+```
+
+2. Controlled family variants:
+
+```text
+attr_same_object_diff_attr
+part_same_parent_diff_part
+part_attr_same_part_diff_attr
+part_attr_same_attr_diff_part
+```
+
+3. Summary tables in the sidecar summary JSON:
+
+```text
+pairs_by_family
+pairs_by_pair_origin
+pairs_by_control_family
+pairs_by_num_changed_fields
+```
+
+4. Rebuild hard sets in this order:
+
+```text
+strict_attr_only
+strict_part_only
+controlled_part_attr_split
+```
+
+5. Rerun SteerViT gate sweep on those controlled hard sets.
+
+### Training rule
+
+Only after the controlled gate sweeps still show a strong signal:
+
+```text
+SteerViT released checkpoint
+vs SteerViT + warm_refseg
+vs SteerViT + warm_cf
+```
+
+The first `warm_cf` run should use only controlled `attr_same_object_diff_attr` and `part_same_parent_diff_part`. Keep `part_attr` out until the split is clean.
+
+### Small code hygiene before larger sweeps
+
+Add `torch.inference_mode()` or `torch.no_grad()` to `eval/gate_sweep.py` before running larger diagnostics.
+
+Also avoid mixed positive-only and paired samples in `warm_cf` until `collate_refexp` is made explicit about partial negative masks. Otherwise, counterfactual loss can silently disappear on mixed batches.
+
+## 2026-04-14: Controlled flip-set rebuild and gate sweep
+
+### Goal
+
+Act on the feedback above rather than moving directly to training.
+
+Specifically:
+
+- Add provenance and controlled subtype accounting to `tools/build_flipset.py`.
+- Add `torch.inference_mode()` to `eval/gate_sweep.py`.
+- Rebuild controlled flip sets.
+- Rerun SteerViT gate sweep on whatever controlled set can actually be built from the current diagnostic data.
+
+### Code changes
+
+`tools/build_flipset.py` now writes these fields on every pair:
+
+```text
+base_family
+pair_origin
+control_family
+same_object_name
+same_parent
+same_part
+same_attribute_name
+same_attribute_type
+attribute_type_compatible
+changed_fields
+num_changed_fields
+mask_iou
+```
+
+It also writes summary counts:
+
+```text
+pairs_by_family
+pairs_by_base_family
+pairs_by_pair_origin
+pairs_by_control_family
+pairs_by_num_changed_fields
+pairs_by_changed_fields
+```
+
+`eval/gate_sweep.py` now wraps the evaluation loop in `torch.inference_mode()`.
+
+### Controlled set availability
+
+The stricter construction exposed a data limitation.
+
+| Manifest | Pairs | Interpretation |
+| --- | ---: | --- |
+| `data/processed/flipset_control_attr_strict.jsonl` | 0 | PACO attributes are mostly multiple labels on the same annotation, not separate same-object instances with different masks. |
+| `data/processed/flipset_control_part_same_parent_strict.jsonl` | 0 | PACO part `parent_obj_ann_id` is effectively self-referential in the processed val manifest. |
+| `data/processed/flipset_control_part_same_object.jsonl` | 0 | Same-image same-object part groups do not contain different part names after mask/metadata filters. |
+| `data/processed/flipset_control_paco_part_attr_split.jsonl` | 0 | Controlled `same_part_diff_attr` / `same_attr_diff_part` pairs are not available with distinct masks under the current filters. |
+| `data/processed/flipset_control_phrasecut_attr.jsonl` | 30 | PhraseCut miniv yields a small controlled attribute set. |
+
+Controlled PhraseCut attr summary:
+
+```text
+num_pairs: 30
+pairs_by_family: {"attr_same_object_diff_attr": 30}
+pairs_by_base_family: {"attr": 20, "plain": 8, "relation": 2}
+pairs_by_pair_origin: {"strict": 30}
+pairs_by_control_family: {"attr_same_object_diff_attr": 30}
+pairs_by_num_changed_fields: {"1": 30}
+pairs_by_changed_fields: {"attribute_name": 30}
+```
+
+Provenance rebuild of the old balanced fallback set:
+
+```text
+manifest: data/processed/flipset_balanced_attr_part_provenance.jsonl
+num_pairs: 768
+pairs_by_family: {"attr": 256, "part": 256, "part_attr": 256}
+pairs_by_pair_origin: {"fallback": 768}
+pairs_by_control_family: {"attr_uncontrolled": 256, "part_uncontrolled": 256, "part_attr_uncontrolled": 256}
+pairs_by_num_changed_fields: {"2": 10, "3": 361, "4": 234, "5": 163}
+```
+
+This confirms the earlier concern: the apparently strong balanced set was balanced by family label, but not controlled by counterfactual difficulty. Most pairs change object identity and multiple metadata fields at once.
+
+### Run E: controlled PhraseCut attr gate sweep
+
+Output:
+
+```text
+runs/gate_sweep_control_phrasecut_attr/summary.json
+```
+
+Command:
+
+```bash
+.venv/bin/python eval/gate_sweep.py \
+  --config configs/smoke_zero_shot.yaml \
+  --manifest data/processed/flipset_control_phrasecut_attr.jsonl \
+  --checkpoint steervit_dinov2_base.pth \
+  --output-dir runs/gate_sweep_control_phrasecut_attr \
+  --limit 30 \
+  --device cuda \
+  --override batch_size=4 num_workers=2 save_overlays=False
+```
+
+Overall metrics:
+
+| Gate | Flip acc | Mean gap |
+| ---: | ---: | ---: |
+| 0.00 | 0.5000 | -0.00000 |
+| 0.25 | 0.6000 | 0.00015 |
+| 0.50 | 0.6333 | 0.00388 |
+| 0.75 | 0.6667 | 0.00396 |
+| 1.00 | 0.7333 | 0.00524 |
+
+Interpretation:
+
+The controlled subset is tiny, so this is not a final benchmark. Still, the gate signal survives the stricter construction: flip accuracy rises from `0.50` at gate `0.0` to `0.7333` at gate `1.0`.
+
+### Updated decision
+
+Do not start `warm_cf` on the old balanced PACO fallback set.
+
+The next model-training milestone needs a larger clean hard set first. Current options:
+
+1. Expand PhraseCut beyond `miniv` and rebuild `attr_same_object_diff_attr`.
+2. Add a dataset with explicit same-object attribute / part distractors.
+3. Run a very small `warm_refseg` sanity check only to test the trainer, not to claim hard counterfactual gains.
+
+For the paper path, the clean next step is option 1 or 2, then rerun controlled gate sweeps before `warm_cf`.

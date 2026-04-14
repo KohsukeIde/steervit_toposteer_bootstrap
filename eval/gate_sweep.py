@@ -98,53 +98,54 @@ def main() -> None:
         rows = []
         overlay_budget = int(cfg.get("num_overlay_samples", 16))
 
-        for batch in tqdm(loader, desc=f"Gate sweep @ {gate_factor}"):
-            images = batch["images"].to(model.device_name)
-            prompts_pos = batch["prompts_pos"]
-            masks_pos = batch["masks_pos"].to(model.device_name)
+        with torch.inference_mode():
+            for batch in tqdm(loader, desc=f"Gate sweep @ {gate_factor}"):
+                images = batch["images"].to(model.device_name)
+                prompts_pos = batch["prompts_pos"]
+                masks_pos = batch["masks_pos"].to(model.device_name)
 
-            out = model.forward_outputs(images, texts=prompts_pos)
-            patch_mask_pos = patchify_soft_mask(masks_pos, model.patch_grid, normalize=False)
-            if batch["masks_neg"] is not None:
-                masks_neg = batch["masks_neg"].to(model.device_name)
-                patch_mask_neg = patchify_soft_mask(masks_neg, model.patch_grid, normalize=False)
-            else:
-                patch_mask_neg = torch.zeros_like(patch_mask_pos)
+                out = model.forward_outputs(images, texts=prompts_pos)
+                patch_mask_pos = patchify_soft_mask(masks_pos, model.patch_grid, normalize=False)
+                if batch["masks_neg"] is not None:
+                    masks_neg = batch["masks_neg"].to(model.device_name)
+                    patch_mask_neg = patchify_soft_mask(masks_neg, model.patch_grid, normalize=False)
+                else:
+                    patch_mask_neg = torch.zeros_like(patch_mask_pos)
 
-            pos_scores, neg_scores = pairwise_mask_scores(
-                out.probs,
-                patch_mask_pos=patch_mask_pos,
-                patch_mask_neg=patch_mask_neg,
-                mode=cfg.get("score_mode", "mean"),
-            )
+                pos_scores, neg_scores = pairwise_mask_scores(
+                    out.probs,
+                    patch_mask_pos=patch_mask_pos,
+                    patch_mask_neg=patch_mask_neg,
+                    mode=cfg.get("score_mode", "mean"),
+                )
 
-            for i in range(images.size(0)):
-                row = {
-                    "id": batch["ids"][i],
-                    "family": batch["families"][i],
-                    "gate_factor": float(gate_factor),
-                    "pos_score": float(pos_scores[i].item()),
-                    "neg_score": float(neg_scores[i].item()),
-                    "gap": float((pos_scores[i] - neg_scores[i]).item()),
-                    "has_neg": bool(batch["masks_neg"] is not None),
-                }
-                rows.append(row)
+                for i in range(images.size(0)):
+                    row = {
+                        "id": batch["ids"][i],
+                        "family": batch["families"][i],
+                        "gate_factor": float(gate_factor),
+                        "pos_score": float(pos_scores[i].item()),
+                        "neg_score": float(neg_scores[i].item()),
+                        "gap": float((pos_scores[i] - neg_scores[i]).item()),
+                        "has_neg": bool(batch["masks_neg"] is not None),
+                    }
+                    rows.append(row)
 
-                if cfg.get("save_overlays", True) and overlay_budget > 0:
-                    heatmap = out.probs[i].view(model.patch_grid).unsqueeze(0).unsqueeze(0)
-                    heatmap = torch.nn.functional.interpolate(
-                        heatmap,
-                        size=model.image_size,
-                        mode="bilinear",
-                        align_corners=False,
-                    ).squeeze()
-                    save_overlay(
-                        images[i].detach().cpu(),
-                        heatmap,
-                        overlay_dir / f"{batch['ids'][i]}_gate{gate_factor:.2f}.png",
-                        alpha=float(cfg.get("overlay_alpha", 0.55)),
-                    )
-                    overlay_budget -= 1
+                    if cfg.get("save_overlays", True) and overlay_budget > 0:
+                        heatmap = out.probs[i].view(model.patch_grid).unsqueeze(0).unsqueeze(0)
+                        heatmap = torch.nn.functional.interpolate(
+                            heatmap,
+                            size=model.image_size,
+                            mode="bilinear",
+                            align_corners=False,
+                        ).squeeze()
+                        save_overlay(
+                            images[i].detach().cpu(),
+                            heatmap,
+                            overlay_dir / f"{batch['ids'][i]}_gate{gate_factor:.2f}.png",
+                            alpha=float(cfg.get("overlay_alpha", 0.55)),
+                        )
+                        overlay_budget -= 1
 
         summary = summarize_rows(rows)
 
