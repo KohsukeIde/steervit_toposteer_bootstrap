@@ -2,6 +2,8 @@
 
 This note is the **research execution order**, not the final paper order.
 
+For executed runs and decisions, see `docs/EXPERIMENT_LOG.md`.
+
 ## Objective
 
 Before writing a method section, answer a narrower question:

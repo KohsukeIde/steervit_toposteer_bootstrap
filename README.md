@@ -236,6 +236,16 @@ python tools/build_flipset.py \
 - Use the released checkpoint first. A cold start is a later question.
 - The real go/no-go is **flip accuracy**, not whether a generic RefCOCO metric nudges upward.
 
+## Experiment log
+
+Diagnostics and result-driven decisions should be recorded in `docs/EXPERIMENT_LOG.md`.
+
+The current logged result is:
+
+- Franca RASA reduces position leakage, but does not yet clearly beat raw tokens on semantic kNN purity or mask retrieval.
+- SteerViT gate sweep shows a strong prompt-conditioning signal on the balanced hard set.
+- Mainline should continue with SteerViT `warm_refseg -> warm_cf`; Franca stays as an ablation path for now.
+
 ## Recommended schedule
 
 Read `docs/INITIAL_EXPERIMENTS.md`.
