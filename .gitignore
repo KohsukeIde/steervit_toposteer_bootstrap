@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pt
+*.pth
+*.png
+*.jpg
+*.jpeg
+*.jsonl
+runs/
+data/
+.venv/

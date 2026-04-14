@@ -1,0 +1,10 @@
+seed: 42
+batch_size: 4
+num_workers: 2
+device: "cuda"
+gate_factors: [0.0, 0.25, 0.5, 0.75, 1.0]
+limit: 256
+save_overlays: true
+num_overlay_samples: 16
+overlay_alpha: 0.55
+score_mode: "mean"
