@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "steervit"
+version = "0.1.0"
+description = "Inference package for SteerViT"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "Jona Ruthardt"},
+  {name = "Manu Gaur"},
+  {name = "Deva Ramanan"},
+  {name = "Makarand Tapaswi"},
+  {name = "Yuki M Asano"},
+]
+dependencies = [
+  "torch>=2.7",
+  "torchvision>=0.22",
+  "transformers>=4.57,<5",
+  "timm>=1.0,<2",
+  "torchmetrics",
+  "open_clip_torch>=2.31,<4",
+  "accelerate",
+  "datasets>=3.2,<5",
+  "huggingface_hub>=0.36,<1",
+  "omegaconf>=2.3",
+  "einops>=0.8,<1",
+  "tqdm",
+  "numpy>=2.0,<3",
+  "scipy",
+  "scikit-learn>=1.7,<2",
+  "pandas",
+  "pyarrow>=18,<22",
+  "pillow>=11,<12",
+  "matplotlib>=3.8",
+  "jupyter",
+  "notebook",
+  "ipykernel",
+  "ipywidgets",
+  "jupyterlab",
+  "umap-learn"
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

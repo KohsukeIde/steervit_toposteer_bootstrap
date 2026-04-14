@@ -1,0 +1,89 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "franca"
+version = "1.0.0"
+description = "Franca: Nested Matryoshka Clustering for Scalable Visual Representation Learning (official repository)."
+readme = "README.md"
+requires-python = ">=3.8.0"
+authors = [
+    { name = "Shashanka Venkataramanan", email = "shashanka.venkataramanan@valeo.com" },
+    { name = "Valentinos Pariza", email = "valentinospariza@gmail.com" },
+    { name = "Elias Ramzi", email = "elias.ramzi@valeo.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "torchmetrics==1.4.3",
+    "tqdm==4.66.5",
+    "numpy==1.26.4",
+    "pillow==10.4.0",
+    "scipy==1.14.0",
+    "omegaconf==2.3.0",
+    "pytorch-lightning==2.4.0",
+    "webdataset==0.2.96",
+    "sacred==0.8.7",
+    "joblib==1.4.2",
+]
+
+[project.optional-dependencies]
+franca = [
+    "scikit-learn==1.5.1",
+    "torchdata==0.11.0",
+    "fvcore@git+https://github.com/facebookresearch/fvcore@f3b07ea37daff5b774702708134f7b702e2dc83e",
+]
+
+dev = [
+    "flake8",
+    "flake8-annotations",
+    "flake8-bugbear",
+    "flake8-comprehensions",
+    "flake8-simplify",
+    "isort",
+    "black[jupyter]",
+    "ipython",
+    "ipdb",
+]
+torch = [
+    "torch==2.4.0",
+    "torchvision>=0.19.0",
+]
+cuml = [
+    "cuml-cu12",
+]
+xformers = [
+    "xformers==0.0.27.post2",
+]
+faiss = [
+    "faiss-gpu-cu12==1.10.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/valeoai/Franca"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["franca", "rasa"]
+
+# Version management with hatchling
+[tool.hatch.version]
+path = "franca/__init__.py"
+
+[tool.black]
+line-length = 127
+target-version = ['py39']
+include = '\.py?$'
+
+[tool.isort]
+atomic = true
+profile = "black"
+line_length = 127
+skip_gitignore = true

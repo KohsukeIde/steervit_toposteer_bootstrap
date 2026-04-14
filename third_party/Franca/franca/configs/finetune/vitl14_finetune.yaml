@@ -1,0 +1,36 @@
+dino:
+  head_n_prototypes: 131072
+  head_bottleneck_dim: 384
+  MRL: True
+ibot:
+  separate_head: true
+  head_n_prototypes: 131072
+train:
+  batch_size_per_gpu: 16
+  dataset_path: ImageNet:split=TRAIN:root=/lustre/fsmisc/dataset/imagenet/:extra=/lustre/fsn1/projects/rech/yic/uco38ei/ImNet_1K_dinov2/extra
+  centering: sinkhorn_knopp
+  use_block_masking: True
+  use_inverse_block: True
+  roll: True
+  high_resolution_finetune: False
+  OFFICIAL_EPOCH_LENGTH: 200
+  saveckp_freq: 1
+student:
+  arch: vit_large
+  patch_size: 14
+  drop_path_rate: 0.1
+  ffn_layer: swiglufused
+  block_chunks: 4
+  pretrained_weights: '/lustre/fsn1/projects/rech/fhx/commun/ckpts/LAION/dinov2_vitl14_mat5x_onbackbone_FT/eval/training_624999/teacher_checkpoint.pth'
+teacher:
+  momentum_teacher: 0.994
+  warmup_teacher_temp_epochs: 30
+optim:
+  epochs: 100
+  weight_decay_end: 0.2
+  base_lr: 1.51e-5  # learning rate for a batch size of 1024
+  warmup_epochs: 50
+  layerwise_decay: 1.0
+crops:
+  local_crops_size: 98
+  global_crops_size: 518
