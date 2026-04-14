@@ -169,29 +169,25 @@ def main() -> None:
     for batch in tqdm(loader, desc="Franca raw/RASA diagnostic"):
         images = batch["images"].to(model.device_name)
         masks_pos = batch["masks_pos"].to(model.device_name)
-        masks_neg = batch["masks_neg"].to(model.device_name) if batch["masks_neg"] is not None else None
+        masks_neg = batch["masks_neg"].to(model.device_name)
+        valid_neg_mask = batch["valid_neg_mask"].to(model.device_name)
 
         out = model.forward_outputs(images)
         patch_pos = patchify_soft_mask(masks_pos, model.patch_grid, normalize=False).to(model.device_name)
-        if masks_neg is not None:
-            patch_neg = patchify_soft_mask(masks_neg, model.patch_grid, normalize=False).to(model.device_name)
-        else:
-            patch_neg = torch.zeros_like(patch_pos)
+        patch_neg = patchify_soft_mask(masks_neg, model.patch_grid, normalize=False).to(model.device_name)
 
         raw_pos = masked_pool(out.raw_patch_tokens, patch_pos)
         rasa_pos = masked_pool(out.rasa_patch_tokens, patch_pos)
         raw_gap = mask_retrieval_gap(out.raw_patch_tokens, raw_pos, patch_pos, patch_neg)
         rasa_gap = mask_retrieval_gap(out.rasa_patch_tokens, rasa_pos, patch_pos, patch_neg)
 
-        if masks_neg is not None:
-            raw_neg = masked_pool(out.raw_patch_tokens, patch_neg)
-            rasa_neg = masked_pool(out.rasa_patch_tokens, patch_neg)
-            raw_sep = 1.0 - F.cosine_similarity(raw_pos, raw_neg, dim=-1)
-            rasa_sep = 1.0 - F.cosine_similarity(rasa_pos, rasa_neg, dim=-1)
-        else:
-            raw_neg = rasa_neg = raw_sep = rasa_sep = None
+        raw_neg = masked_pool(out.raw_patch_tokens, patch_neg)
+        rasa_neg = masked_pool(out.rasa_patch_tokens, patch_neg)
+        raw_sep = 1.0 - F.cosine_similarity(raw_pos, raw_neg, dim=-1)
+        rasa_sep = 1.0 - F.cosine_similarity(rasa_pos, rasa_neg, dim=-1)
 
         for i in range(images.size(0)):
+            has_neg = bool(valid_neg_mask[i].item())
             raw_pos_corrs.append(position_leakage_corr(out.raw_patch_tokens[i], model.patch_grid, args.position_sample_patches))
             rasa_pos_corrs.append(position_leakage_corr(out.rasa_patch_tokens[i], model.patch_grid, args.position_sample_patches))
 
@@ -214,13 +210,14 @@ def main() -> None:
                 "id": batch["ids"][i],
                 "family": family,
                 "pos_label": pos_label,
-                "raw_mask_retrieval_gap": float(raw_gap[i].detach().cpu().item()),
-                "rasa_mask_retrieval_gap": float(rasa_gap[i].detach().cpu().item()),
+                "has_neg": has_neg,
+                "raw_mask_retrieval_gap": float(raw_gap[i].detach().cpu().item()) if has_neg else float("nan"),
+                "rasa_mask_retrieval_gap": float(rasa_gap[i].detach().cpu().item()) if has_neg else float("nan"),
                 "raw_position_leakage_corr": raw_pos_corrs[-1],
                 "rasa_position_leakage_corr": rasa_pos_corrs[-1],
             }
 
-            if raw_sep is not None and rasa_sep is not None:
+            if has_neg:
                 neg_meta = _entity_meta(meta, "neg")
                 neg_prompt = batch["prompts_neg"][i] or ""
                 neg_label = _semantic_label(family, neg_meta, neg_prompt)

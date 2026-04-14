@@ -49,16 +49,19 @@ def evaluate(model: SteerViTTrainable, loader: DataLoader, cfg: dict) -> dict[st
     for batch in loader:
         images = batch["images"].to(model.device_name)
         masks_pos = batch["masks_pos"].to(model.device_name)
+        valid_neg_mask = batch["valid_neg_mask"].to(model.device_name)
+
         out = model.forward_outputs(images, texts=batch["prompts_pos"])
         patch_target = patchify_soft_mask(masks_pos, model.patch_grid, normalize=True)
         losses.append(float(soft_patch_ce(out.logits, patch_target).item()))
 
-        if batch["masks_neg"] is not None:
+        if valid_neg_mask.any():
             masks_neg = batch["masks_neg"].to(model.device_name)
             patch_pos = patchify_soft_mask(masks_pos, model.patch_grid, normalize=False)
             patch_neg = patchify_soft_mask(masks_neg, model.patch_grid, normalize=False)
-            pos_scores = (out.probs * patch_pos).sum(dim=1) / patch_pos.sum(dim=1).clamp_min(1e-6)
-            neg_scores = (out.probs * patch_neg).sum(dim=1) / patch_neg.sum(dim=1).clamp_min(1e-6)
+            valid_idx = valid_neg_mask.nonzero(as_tuple=False).squeeze(1)
+            pos_scores = (out.probs[valid_idx] * patch_pos[valid_idx]).sum(dim=1) / patch_pos[valid_idx].sum(dim=1).clamp_min(1e-6)
+            neg_scores = (out.probs[valid_idx] * patch_neg[valid_idx]).sum(dim=1) / patch_neg[valid_idx].sum(dim=1).clamp_min(1e-6)
             pos_scores_all.append(pos_scores.detach().cpu())
             neg_scores_all.append(neg_scores.detach().cpu())
 
@@ -69,6 +72,10 @@ def evaluate(model: SteerViTTrainable, loader: DataLoader, cfg: dict) -> dict[st
         metrics["val_flip_accuracy"] = compute_flip_accuracy(pos_scores, neg_scores)
         metrics["val_gap"] = float((pos_scores - neg_scores).mean().item())
     return metrics
+
+
+def _select_texts(texts: list[str | None], indices: torch.Tensor) -> list[str]:
+    return [texts[int(i)] for i in indices.detach().cpu().tolist()]
 
 
 def main() -> None:
@@ -150,7 +157,9 @@ def main() -> None:
 
             images = batch["images"].to(model.device_name)
             masks_pos = batch["masks_pos"].to(model.device_name)
-            masks_neg = batch["masks_neg"].to(model.device_name) if batch["masks_neg"] is not None else None
+            masks_neg = batch["masks_neg"].to(model.device_name)
+            valid_neg_mask = batch["valid_neg_mask"].to(model.device_name)
+            valid_prompt_neg_mask = batch["valid_prompt_neg_mask"].to(model.device_name)
 
             optimizer.zero_grad(set_to_none=True)
 
@@ -163,33 +172,34 @@ def main() -> None:
                 loss_cf = torch.tensor(0.0, device=model.device_name)
                 loss_bg = torch.tensor(0.0, device=model.device_name)
 
-                if cfg["loss"].get("use_counterfactual", False) and masks_neg is not None:
+                if cfg["loss"].get("use_counterfactual", False) and valid_neg_mask.any():
                     patch_pos = patchify_soft_mask(masks_pos, model.patch_grid, normalize=False)
                     patch_neg = patchify_soft_mask(masks_neg, model.patch_grid, normalize=False)
 
-                    reverse_probs = None
-                    if any(p is not None for p in batch["prompts_neg"]):
-                        # for simplicity, require all when present
-                        reverse_out = model.forward_outputs(images, texts=batch["prompts_neg"])
-                        reverse_probs = reverse_out.probs
-
+                    valid_idx = valid_neg_mask.nonzero(as_tuple=False).squeeze(1)
                     loss_cf = counterfactual_margin_loss(
-                        patch_probs_pos_prompt=out_pos.probs,
-                        patch_mask_pos=patch_pos,
-                        patch_mask_neg=patch_neg,
-                        patch_probs_neg_prompt=reverse_probs,
+                        patch_probs_pos_prompt=out_pos.probs[valid_idx],
+                        patch_mask_pos=patch_pos[valid_idx],
+                        patch_mask_neg=patch_neg[valid_idx],
                         margin=float(cfg["loss"].get("cf_margin", 0.10)),
                     )
+
+                    if valid_prompt_neg_mask.any():
+                        reverse_idx = valid_prompt_neg_mask.nonzero(as_tuple=False).squeeze(1)
+                        reverse_out = model.forward_outputs(images[reverse_idx], texts=_select_texts(batch["prompts_neg"], reverse_idx))
+                        loss_cf = loss_cf + counterfactual_margin_loss(
+                            patch_probs_pos_prompt=reverse_out.probs,
+                            patch_mask_pos=patch_neg[reverse_idx],
+                            patch_mask_neg=patch_pos[reverse_idx],
+                            margin=float(cfg["loss"].get("cf_margin", 0.10)),
+                        )
+
                     total_loss = total_loss + float(cfg["loss"].get("cf_weight", 1.0)) * loss_cf
 
                 if cfg["loss"].get("use_background", False):
                     base_out = model.forward_outputs(images, texts=None)
                     patch_pos = patchify_soft_mask(masks_pos, model.patch_grid, normalize=False)
-                    if masks_neg is not None:
-                        patch_neg = patchify_soft_mask(masks_neg, model.patch_grid, normalize=False)
-                        protect = 1.0 - torch.clamp(patch_pos + patch_neg, 0.0, 1.0)
-                    else:
-                        protect = 1.0 - torch.clamp(patch_pos, 0.0, 1.0)
+                    protect = 1.0 - torch.clamp(patch_pos + patchify_soft_mask(masks_neg, model.patch_grid, normalize=False), 0.0, 1.0)
                     loss_bg = background_cosine_drift(out_pos.dense_tokens, base_out.dense_tokens.detach(), protect)
                     total_loss = total_loss + float(cfg["loss"].get("bg_weight", 0.25)) * loss_bg
 
@@ -208,6 +218,8 @@ def main() -> None:
                 "loss_refseg": float(loss_refseg.item()),
                 "loss_cf": float(loss_cf.item()),
                 "loss_bg": float(loss_bg.item()),
+                "num_valid_neg": int(valid_neg_mask.sum().item()),
+                "num_valid_prompt_neg": int(valid_prompt_neg_mask.sum().item()),
             }
             log_rows.append(row)
 

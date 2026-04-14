@@ -538,3 +538,193 @@ The next model-training milestone needs a larger clean hard set first. Current o
 3. Run a very small `warm_refseg` sanity check only to test the trainer, not to claim hard counterfactual gains.
 
 For the paper path, the clean next step is option 1 or 2, then rerun controlled gate sweeps before `warm_cf`.
+
+## 2026-04-15: Attr-first scaffold integration
+
+### Decision
+
+Move the immediate mainline to:
+
+```text
+SteerViT + clean same-object attribute flips
+```
+
+Freeze PACO fallback benchmarks, part / part-attribute claims, Franca mainline migration, topology loss, and Grounding-DINO / VLM online loops until the attribute benchmark is clean and large enough.
+
+The candidate patch was integrated from:
+
+```text
+/home/cvrt/Desktop/dev/topo_steer/toposteer_steervit_scaffold_attr_fix.zip
+```
+
+### Code changes
+
+Added:
+
+- `tools/mine_phrasecut_controlled_attr.py`
+- `tools/audit_paco_controls.py`
+- `docs/NEXT_STEPS_ATTR.md`
+- `tests/test_datasets.py`
+
+Updated:
+
+- `src/toposteer/datasets/unified_refexp.py`
+- `src/toposteer/losses/counterfactual.py`
+- `train/train_refseg.py`
+- `eval/gate_sweep.py`
+- `eval/flip_accuracy.py`
+- `eval/franca_space_diagnostic.py`
+- `tests/test_losses.py`
+
+Important behavior:
+
+- `collate_refexp` now always returns zero-filled `masks_neg`, plus `valid_neg_mask` and `valid_prompt_neg_mask`.
+- `warm_cf` computes counterfactual loss only on the valid negative subset, so mixed positive-only / paired batches no longer silently drop CF supervision.
+- `gate_sweep.py` uses `torch.inference_mode()`, respects `valid_neg_mask`, writes family summaries, and can emit bootstrap CIs via `bootstrap_samples`.
+- `flip_accuracy.py` and the Franca diagnostic no longer treat zero-filled negative masks as real negatives.
+- Empty counterfactual subsets now return zero loss instead of producing invalid reductions.
+
+### Verification
+
+Commands:
+
+```bash
+.venv/bin/python -m compileall src tools eval train tests
+.venv/bin/python -m pytest tests
+```
+
+Result:
+
+```text
+7 passed
+```
+
+### Run F: PhraseCut miniv controlled attr mining smoke
+
+Output:
+
+```text
+data/processed/phrasecut_controlled_attr_miniv/summary.json
+```
+
+Command:
+
+```bash
+.venv/bin/python tools/mine_phrasecut_controlled_attr.py \
+  --input-manifest data/processed/phrasecut_miniv/manifest.jsonl \
+  --output-dir data/processed/phrasecut_controlled_attr_miniv
+```
+
+Headline counts:
+
+| Split tier | Pairs |
+| --- | ---: |
+| `gold_train` | 0 |
+| `gold_eval` | 14 |
+| `silver_train` | 0 |
+| `silver_eval` | 20 |
+
+All `gold_eval` pairs are `color` attribute flips.
+
+Interpretation:
+
+This confirms the miner works on the current local data, but `miniv` is too small for the next milestone. The actual go/no-go still requires PhraseCut full or another source that yields at least 100 clean gold attr eval pairs.
+
+### Run G: PACO strict control audit
+
+Output:
+
+```text
+runs/audit_paco_controls_val_attr_first/summary.json
+```
+
+Command:
+
+```bash
+.venv/bin/python tools/audit_paco_controls.py \
+  --input-manifest data/processed/paco_lvis_val/manifest.jsonl \
+  --output-dir runs/audit_paco_controls_val_attr_first
+```
+
+Headline counts:
+
+| Metric | Value |
+| --- | ---: |
+| records | 49,258 |
+| groups | 45,622 |
+| attr candidate pairs | 7,900 |
+| part_attr candidate pairs | 1,740 |
+| valid strict examples | 0 |
+
+Invalid reasons:
+
+```text
+high_iou: 9640
+same_ann: 9640
+```
+
+Interpretation:
+
+Under the current PACO-LVIS val manifest and strict mask/metadata filters, PACO does not provide usable v1 controlled pairs. Keep PACO out of the main benchmark for now.
+
+### Run H: miniv gold attr gate sweep with bootstrap CI
+
+Output:
+
+```text
+runs/gate_sweep_phrasecut_attr_miniv_gold_bootstrap/summary.json
+```
+
+Command:
+
+```bash
+.venv/bin/python eval/gate_sweep.py \
+  --config configs/smoke_zero_shot.yaml \
+  --manifest data/processed/phrasecut_controlled_attr_miniv/gold_eval.jsonl \
+  --checkpoint /home/cvrt/.cache/huggingface/hub/models--JonaRuthardt--SteerViT/snapshots/cdc29ddb5ddb8cfb6c0194c461eba14309b5afc7/steervit_dinov2_base.pth \
+  --output-dir runs/gate_sweep_phrasecut_attr_miniv_gold_bootstrap \
+  --override save_overlays=False bootstrap_samples=2000
+```
+
+Metrics:
+
+| Gate | Flip acc | 95% CI | Mean gap |
+| ---: | ---: | ---: | ---: |
+| 0.00 | 0.5000 | [0.2143, 0.7857] | 0.00000 |
+| 0.25 | 0.5714 | [0.3571, 0.7857] | 0.00357 |
+| 0.50 | 0.7143 | [0.5000, 0.9286] | 0.01399 |
+| 0.75 | 0.7143 | [0.5000, 0.9286] | 0.01177 |
+| 1.00 | 0.7857 | [0.5714, 1.0000] | 0.00968 |
+
+Interpretation:
+
+The CI path works, and the released SteerViT signal is still visible even on the stricter miniv-derived gold set. Because `n=14`, treat this only as a smoke diagnostic, not a benchmark claim.
+
+Additional compatibility check:
+
+```bash
+.venv/bin/python eval/flip_accuracy.py \
+  --manifest data/processed/phrasecut_controlled_attr_miniv/gold_eval.jsonl \
+  --checkpoint /home/cvrt/.cache/huggingface/hub/models--JonaRuthardt--SteerViT/snapshots/cdc29ddb5ddb8cfb6c0194c461eba14309b5afc7/steervit_dinov2_base.pth \
+  --gate-factor 1.0 \
+  --device cuda \
+  --batch-size 4
+```
+
+Result:
+
+```text
+flip_accuracy=0.7857
+mean_gap=0.0097
+```
+
+### Next action
+
+Prepare PhraseCut full and rerun `tools/mine_phrasecut_controlled_attr.py`. The next go/no-go is:
+
+```text
+gold_eval >= 100 clean same-object attribute pairs
+released SteerViT gate 1.0 > gate 0.0 with CI recorded
+warm_refseg does not degrade locked gold attr eval
+warm_cf(attr-only) beats warm_refseg on locked gold attr eval
+```

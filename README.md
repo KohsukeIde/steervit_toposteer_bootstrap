@@ -243,8 +243,11 @@ Diagnostics and result-driven decisions should be recorded in `docs/EXPERIMENT_L
 The current logged result is:
 
 - Franca RASA reduces position leakage, but does not yet clearly beat raw tokens on semantic kNN purity or mask retrieval.
-- SteerViT gate sweep shows a strong prompt-conditioning signal on the balanced hard set.
-- Mainline should continue with SteerViT `warm_refseg -> warm_cf`; Franca stays as an ablation path for now.
+- The old balanced PACO fallback set is not a clean benchmark; it should not drive the next paper claim.
+- Mainline is now SteerViT + clean same-object attribute flips, with `warm_refseg` before attr-only `warm_cf`.
+- Franca, topology loss, PACO fallback pairs, and online Grounding-DINO / VLM loops stay frozen until the clean attr benchmark is large enough.
+
+For the immediate attr-first track, read `docs/NEXT_STEPS_ATTR.md`.
 
 ## Recommended schedule
 

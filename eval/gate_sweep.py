@@ -57,6 +57,22 @@ def summarize_rows(rows: list[dict]) -> dict:
     return summary
 
 
+def bootstrap_flip_accuracy(pos_scores: np.ndarray, neg_scores: np.ndarray, num_samples: int, seed: int = 42) -> dict[str, float]:
+    if len(pos_scores) == 0 or num_samples <= 0:
+        return {}
+    rng = np.random.default_rng(seed)
+    idx = np.arange(len(pos_scores))
+    values = []
+    for _ in range(num_samples):
+        sample_idx = rng.choice(idx, size=len(idx), replace=True)
+        values.append(float(np.mean(pos_scores[sample_idx] > neg_scores[sample_idx])))
+    values = np.asarray(values, dtype=np.float64)
+    return {
+        "flip_accuracy_ci_low": float(np.quantile(values, 0.025)),
+        "flip_accuracy_ci_high": float(np.quantile(values, 0.975)),
+    }
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_yaml(args.config)
@@ -90,6 +106,7 @@ def main() -> None:
 
     all_summary = []
     per_factor_records: dict[float, list[dict]] = {}
+    bootstrap_samples = int(cfg.get("bootstrap_samples", 0))
 
     for gate_factor in cfg.get("gate_factors", [0.0, 1.0]):
         model.eval()
@@ -103,14 +120,11 @@ def main() -> None:
                 images = batch["images"].to(model.device_name)
                 prompts_pos = batch["prompts_pos"]
                 masks_pos = batch["masks_pos"].to(model.device_name)
+                valid_neg_mask = batch["valid_neg_mask"].to(model.device_name)
 
                 out = model.forward_outputs(images, texts=prompts_pos)
                 patch_mask_pos = patchify_soft_mask(masks_pos, model.patch_grid, normalize=False)
-                if batch["masks_neg"] is not None:
-                    masks_neg = batch["masks_neg"].to(model.device_name)
-                    patch_mask_neg = patchify_soft_mask(masks_neg, model.patch_grid, normalize=False)
-                else:
-                    patch_mask_neg = torch.zeros_like(patch_mask_pos)
+                patch_mask_neg = patchify_soft_mask(batch["masks_neg"].to(model.device_name), model.patch_grid, normalize=False)
 
                 pos_scores, neg_scores = pairwise_mask_scores(
                     out.probs,
@@ -120,14 +134,15 @@ def main() -> None:
                 )
 
                 for i in range(images.size(0)):
+                    has_neg = bool(valid_neg_mask[i].item())
                     row = {
                         "id": batch["ids"][i],
                         "family": batch["families"][i],
                         "gate_factor": float(gate_factor),
                         "pos_score": float(pos_scores[i].item()),
-                        "neg_score": float(neg_scores[i].item()),
-                        "gap": float((pos_scores[i] - neg_scores[i]).item()),
-                        "has_neg": bool(batch["masks_neg"] is not None),
+                        "neg_score": float(neg_scores[i].item()) if has_neg else None,
+                        "gap": float((pos_scores[i] - neg_scores[i]).item()) if has_neg else None,
+                        "has_neg": has_neg,
                     }
                     rows.append(row)
 
@@ -148,9 +163,14 @@ def main() -> None:
                         overlay_budget -= 1
 
         summary = summarize_rows(rows)
+        valid_rows = [r for r in rows if r["has_neg"]]
+        if valid_rows:
+            pos_arr = np.asarray([r["pos_score"] for r in valid_rows], dtype=np.float32)
+            neg_arr = np.asarray([r["neg_score"] for r in valid_rows], dtype=np.float32)
+            summary.update(bootstrap_flip_accuracy(pos_arr, neg_arr, bootstrap_samples, seed=cfg.get("seed", 42)))
 
         family_rows = defaultdict(list)
-        for row in rows:
+        for row in valid_rows:
             family_rows[row.get("family", "unknown")].append(row)
         summary["by_family"] = {family: summarize_rows(fam_rows) for family, fam_rows in sorted(family_rows.items())}
 

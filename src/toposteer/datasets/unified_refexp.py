@@ -65,11 +65,14 @@ class UnifiedRefExpDataset(Dataset):
         if rec.get("mask_neg_path"):
             item["mask_neg"] = self._load_mask(rec["mask_neg_path"])
             item["mask_neg_path"] = rec["mask_neg_path"]
+            item["has_neg"] = True
         else:
             item["mask_neg"] = None
             item["mask_neg_path"] = None
+            item["has_neg"] = False
 
         item["prompt_neg"] = rec.get("prompt_neg")
+        item["has_prompt_neg"] = item["prompt_neg"] is not None
         return item
 
 
@@ -77,15 +80,23 @@ def collate_refexp(batch: list[dict[str, Any]]) -> dict[str, Any]:
     images = torch.stack([x["image"] for x in batch], dim=0)
     masks_pos = torch.stack([x["mask_pos"] for x in batch], dim=0)
 
-    masks_neg = None
-    if all(x["mask_neg"] is not None for x in batch):
-        masks_neg = torch.stack([x["mask_neg"] for x in batch], dim=0)
+    masks_neg = torch.stack(
+        [x["mask_neg"] if x["mask_neg"] is not None else torch.zeros_like(x["mask_pos"]) for x in batch],
+        dim=0,
+    )
+    valid_neg_mask = torch.tensor([bool(x["has_neg"]) for x in batch], dtype=torch.bool)
+    valid_prompt_neg_mask = torch.tensor(
+        [bool(x["has_neg"] and x["has_prompt_neg"]) for x in batch],
+        dtype=torch.bool,
+    )
 
     return {
         "ids": [x["id"] for x in batch],
         "images": images,
         "masks_pos": masks_pos,
         "masks_neg": masks_neg,
+        "valid_neg_mask": valid_neg_mask,
+        "valid_prompt_neg_mask": valid_prompt_neg_mask,
         "prompts_pos": [x["prompt_pos"] for x in batch],
         "prompts_neg": [x["prompt_neg"] for x in batch],
         "families": [x["family"] for x in batch],

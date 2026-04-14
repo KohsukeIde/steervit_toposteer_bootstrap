@@ -43,6 +43,9 @@ def counterfactual_margin_loss(
     Optional reverse direction:
         prompt_neg should score the negative mask above the positive mask.
     """
+    if patch_probs_pos_prompt.numel() == 0:
+        return torch.zeros((), device=patch_probs_pos_prompt.device, dtype=patch_probs_pos_prompt.dtype)
+
     pos_score, neg_score = pairwise_mask_scores(
         patch_probs_pos_prompt,
         patch_mask_pos=patch_mask_pos,
@@ -52,6 +55,8 @@ def counterfactual_margin_loss(
     loss = F.relu(margin - pos_score + neg_score)
 
     if patch_probs_neg_prompt is not None:
+        if patch_probs_neg_prompt.numel() == 0:
+            return loss.mean()
         neg_prompt_pos_score, neg_prompt_neg_score = pairwise_mask_scores(
             patch_probs_neg_prompt,
             patch_mask_pos=patch_mask_neg,

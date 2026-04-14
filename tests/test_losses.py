@@ -26,3 +26,11 @@ def test_background_cosine_drift_zero_when_equal():
     protect = torch.ones(2, 4)
     loss = background_cosine_drift(a, b, protect)
     assert abs(loss.item()) < 1e-6
+
+
+def test_counterfactual_margin_loss_empty_batch_returns_zero():
+    probs = torch.zeros(0, 2)
+    pos_mask = torch.zeros(0, 2)
+    neg_mask = torch.zeros(0, 2)
+    loss = counterfactual_margin_loss(probs, pos_mask, neg_mask, margin=0.1)
+    assert loss.item() == 0.0
