@@ -728,3 +728,214 @@ released SteerViT gate 1.0 > gate 0.0 with CI recorded
 warm_refseg does not degrade locked gold attr eval
 warm_cf(attr-only) beats warm_refseg on locked gold attr eval
 ```
+
+## 2026-04-15: PhraseCut full controlled attr benchmark
+
+### Goal
+
+Build the first full-scale clean same-object attribute benchmark from PhraseCut, then rerun the released SteerViT gate sweep with bootstrap confidence intervals.
+
+This milestone intentionally does not run `warm_refseg`, `warm_cf`, topology loss, Franca, or Grounding-DINO.
+
+### Code changes
+
+Added:
+
+- `tools/download_phrasecut_full.py`
+
+Updated:
+
+- `tools/prepare_phrasecut.py`
+
+Important behavior:
+
+- `tools/download_phrasecut_full.py` downloads upstream PhraseCut annotations and image URLs into `data/raw/phrasecut/VGPhraseCut_v0/`, skips existing files, and writes both `summary.json` and `download_phrasecut_full_summary.json`.
+- `tools/prepare_phrasecut.py` now accepts one or more `--refer-json` inputs and can run with `--allow-missing-images`. This allows full annotation mining before all train images are locally present.
+
+### Data download status
+
+Annotations are present for all requested splits:
+
+```text
+refer_train.json
+refer_val.json
+refer_test.json
+refer_miniv.json
+refer_input_train.json
+refer_input_val.json
+refer_input_test.json
+refer_input_miniv.json
+image_data_split.json
+```
+
+Image status:
+
+| Split | Expected images | Existing images |
+| --- | ---: | ---: |
+| `val` | 2,900 | 2,900 |
+| `test` | 2,601 | 2,601 |
+| `miniv` | 100 | 100 |
+
+The initial full image download was started with all splits, but the per-image upstream download path was too slow for the train split in this milestone. The run was then resumed for `val / test / miniv`, which are the splits required for the locked gold eval gate sweep. Train images must be completed before a full positive-only `warm_refseg` run that reads train images.
+
+Reproducible eval-image completion command:
+
+```bash
+.venv/bin/python tools/download_phrasecut_full.py \
+  --output-root data/raw/phrasecut/VGPhraseCut_v0 \
+  --splits val test miniv \
+  --image-workers 16 \
+  --skip-existing
+```
+
+Output:
+
+```text
+data/raw/phrasecut/VGPhraseCut_v0/summary.json
+data/raw/phrasecut/VGPhraseCut_v0/download_phrasecut_full_summary.json
+```
+
+### Full manifest preparation
+
+Command:
+
+```bash
+.venv/bin/python tools/prepare_phrasecut.py \
+  --refer-json \
+    data/raw/phrasecut/VGPhraseCut_v0/refer_train.json \
+    data/raw/phrasecut/VGPhraseCut_v0/refer_val.json \
+    data/raw/phrasecut/VGPhraseCut_v0/refer_test.json \
+    data/raw/phrasecut/VGPhraseCut_v0/refer_miniv.json \
+  --image-meta-json data/raw/phrasecut/VGPhraseCut_v0/image_data_split.json \
+  --images-dir data/raw/phrasecut/VGPhraseCut_v0/images \
+  --output-dir data/processed/phrasecut_full \
+  --allow-missing-images
+```
+
+Output:
+
+```text
+data/processed/phrasecut_full/manifest.jsonl
+data/processed/phrasecut_full/summary.json
+```
+
+Headline counts:
+
+| Metric | Count |
+| --- | ---: |
+| total records | 345,486 |
+| `train` records | 310,816 |
+| `val` records | 19,495 |
+| `test` records | 14,354 |
+| `miniv` records | 821 |
+| `attr` records | 40,878 |
+| `relation` records | 9,297 |
+| `plain` records | 295,311 |
+| missing-image records | 310,816 |
+
+The missing-image count corresponds to train records under the current local image state.
+
+### Controlled attr mining
+
+Command:
+
+```bash
+.venv/bin/python tools/mine_phrasecut_controlled_attr.py \
+  --input-manifest data/processed/phrasecut_full/manifest.jsonl \
+  --output-dir data/processed/phrasecut_controlled_attr_full
+```
+
+Output:
+
+```text
+data/processed/phrasecut_controlled_attr_full/summary.json
+data/processed/phrasecut_controlled_attr_full/gold_eval.jsonl
+data/processed/phrasecut_controlled_attr_full/gold_train.jsonl
+data/processed/phrasecut_controlled_attr_full/silver_eval.jsonl
+data/processed/phrasecut_controlled_attr_full/silver_train.jsonl
+```
+
+Pair counts:
+
+| Tier | Pairs |
+| --- | ---: |
+| `gold_train` | 2,322 |
+| `gold_eval` | 604 |
+| `silver_train` | 2,430 |
+| `silver_eval` | 636 |
+
+Gold eval attribute types:
+
+| Attribute type | Pairs |
+| --- | ---: |
+| `color` | 576 |
+| `size` | 26 |
+| `material` | 2 |
+
+Decision:
+
+```text
+GO for locked gold-eval gate sweep.
+gold_eval = 604 >= 100.
+```
+
+### Run I: full PhraseCut gold attr gate sweep
+
+Output:
+
+```text
+runs/gate_sweep_phrasecut_attr_full_gold_bootstrap/summary.json
+```
+
+Command:
+
+```bash
+.venv/bin/python eval/gate_sweep.py \
+  --config configs/smoke_zero_shot.yaml \
+  --manifest data/processed/phrasecut_controlled_attr_full/gold_eval.jsonl \
+  --checkpoint /home/cvrt/.cache/huggingface/hub/models--JonaRuthardt--SteerViT/snapshots/cdc29ddb5ddb8cfb6c0194c461eba14309b5afc7/steervit_dinov2_base.pth \
+  --output-dir runs/gate_sweep_phrasecut_attr_full_gold_bootstrap \
+  --override save_overlays=False bootstrap_samples=2000 limit=None
+```
+
+The `limit=None` override is intentional because `configs/smoke_zero_shot.yaml` defaults to `limit: 256`, while this run evaluates all 604 gold pairs.
+
+Metrics:
+
+| Gate | Flip acc | 95% CI | Mean gap |
+| ---: | ---: | ---: | ---: |
+| 0.00 | 0.5000 | [0.4603, 0.5414] | 0.00000 |
+| 0.25 | 0.6291 | [0.5911, 0.6689] | 0.00247 |
+| 0.50 | 0.7831 | [0.7517, 0.8146] | 0.00925 |
+| 0.75 | 0.8245 | [0.7947, 0.8560] | 0.01199 |
+| 1.00 | 0.8278 | [0.7996, 0.8576] | 0.01169 |
+
+Interpretation:
+
+The released SteerViT checkpoint shows a strong prompt-conditioned signal on the full clean PhraseCut gold attr benchmark. Gate `0.0` is at chance, while gate `1.0` reaches `0.8278` flip accuracy with a positive mean gap and a narrow bootstrap CI.
+
+### Decision
+
+Proceed with the attr-first mainline.
+
+Next milestone:
+
+1. Complete or otherwise scope train-image availability before `warm_refseg`.
+2. Run positive-only `warm_refseg` as a trainer and checkpoint-stability sanity check.
+3. Keep `gold_eval.jsonl` locked for milestone checks only, not threshold tuning or checkpoint selection.
+4. Start `warm_cf(attr-only)` only after the positive-only run is stable.
+
+### Verification
+
+Commands:
+
+```bash
+.venv/bin/python -m compileall src tools eval train tests
+.venv/bin/python -m pytest tests
+```
+
+Result:
+
+```text
+7 passed
+```

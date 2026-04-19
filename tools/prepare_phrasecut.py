@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from pathlib import Path
 
 from tqdm import tqdm
@@ -12,11 +13,18 @@ from toposteer.utils.mask_ops import polygons_to_mask, save_binary_mask
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert PhraseCut annotations to unified manifest format.")
-    parser.add_argument("--refer-json", type=str, required=True, help="Path to refer_train.json / refer_val.json / refer_test.json")
+    parser.add_argument(
+        "--refer-json",
+        type=str,
+        nargs="+",
+        required=True,
+        help="One or more refer_train.json / refer_val.json / refer_test.json / refer_miniv.json files.",
+    )
     parser.add_argument("--image-meta-json", type=str, required=True, help="Path to image_data_split3000.json")
     parser.add_argument("--images-dir", type=str, required=True, help="Directory containing Visual Genome images")
     parser.add_argument("--output-dir", type=str, required=True)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--allow-missing-images", action="store_true")
     return parser.parse_args()
 
 
@@ -42,12 +50,22 @@ def main() -> None:
     output_dir = ensure_dir(args.output_dir)
     mask_dir = ensure_dir(output_dir / "masks")
 
-    tasks = read_json(args.refer_json)
+    refer_json_paths = [Path(path) for path in args.refer_json]
+    tasks = []
+    task_counts_by_file = {}
+    for refer_json_path in refer_json_paths:
+        file_tasks = read_json(refer_json_path)
+        task_counts_by_file[str(refer_json_path)] = len(file_tasks)
+        tasks.extend(file_tasks)
+
     image_meta = read_json(args.image_meta_json)
     image_index = {x["image_id"]: x for x in image_meta}
     images_dir = Path(args.images_dir)
 
     records = []
+    split_counts = Counter()
+    family_counts = Counter()
+    missing_images = 0
     for idx, task in enumerate(tqdm(tasks, desc="Preparing PhraseCut")):
         if args.limit is not None and idx >= args.limit:
             break
@@ -62,6 +80,8 @@ def main() -> None:
             fallback_png = images_dir / f"{image_id}.png"
             if fallback_png.exists():
                 image_path = fallback_png
+            elif args.allow_missing_images:
+                missing_images += 1
             else:
                 raise FileNotFoundError(f"Could not find image for PhraseCut image_id={image_id} at {image_path}")
 
@@ -71,11 +91,13 @@ def main() -> None:
         save_binary_mask(mask, mask_path)
 
         phrase_structure = task.get("phrase_structure", {})
+        family = infer_family(task)
+        split = info.get("split", "unknown")
         record = {
             "id": f"phrasecut_{task['task_id']}",
             "source": "phrasecut",
-            "split": info.get("split", "unknown"),
-            "family": infer_family(task),
+            "split": split,
+            "family": family,
             "image_path": str(image_path),
             "mask_pos_path": str(mask_path),
             "prompt_pos": task["phrase"],
@@ -90,6 +112,8 @@ def main() -> None:
             },
         }
         records.append(record)
+        split_counts[split] += 1
+        family_counts[family] += 1
 
     manifest_path = output_dir / "manifest.jsonl"
     write_jsonl(manifest_path, records)
@@ -98,7 +122,12 @@ def main() -> None:
         {
             "num_records": len(records),
             "manifest_path": str(manifest_path),
-            "refer_json": str(args.refer_json),
+            "refer_json": [str(path) for path in refer_json_paths],
+            "task_counts_by_file": task_counts_by_file,
+            "split_counts": dict(split_counts),
+            "family_counts": dict(family_counts),
+            "missing_images": missing_images,
+            "allow_missing_images": bool(args.allow_missing_images),
             "image_meta_json": str(args.image_meta_json),
             "images_dir": str(images_dir),
         },
