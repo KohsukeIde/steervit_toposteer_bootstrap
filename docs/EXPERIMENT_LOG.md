@@ -599,6 +599,273 @@ Result:
 7 passed
 ```
 
+## 2026-04-19: Locked color dev/test and train availability
+
+### Goal
+
+Act on the attr-first feedback:
+
+- Treat the current benchmark as color-first, not broad attribute reasoning.
+- Split the 604-pair gold eval into a group-wise locked color dev/test benchmark.
+- Make sure reverse pairs and equivalent color flips cannot cross dev/test.
+- Check whether train images are locally available before `warm_refseg`.
+- Add locked eval hooks and gate-curve AUGC support for the next training milestone.
+
+### Code changes
+
+Integrated from the locked-eval update patch:
+
+- `tools/materialize_existing_records.py`
+- `tools/check_split_leakage.py`
+- locked eval / best-checkpoint selection in `train/train_refseg.py`
+- `curve_aggregates.flip_accuracy_augc` in `eval/gate_sweep.py`
+- `normalized_trapz_area` in `src/toposteer/evaluation/metrics.py`
+
+Added:
+
+- `tools/split_locked_attr_benchmark.py`
+- `tools/download_phrasecut_manifest_images.py`
+- `docs/BENCHMARKS.md`
+
+Local addition:
+
+- `tools/materialize_existing_records.py` now supports `--keep-splits`, so train availability can be checked without accidentally retaining `val/test/miniv`.
+
+### Locked color split
+
+Command:
+
+```bash
+.venv/bin/python tools/split_locked_attr_benchmark.py \
+  --input-manifest data/processed/phrasecut_controlled_attr_full/gold_eval.jsonl \
+  --output-dir data/processed/phrasecut_locked_attr_v1 \
+  --attr-type color \
+  --dev-pairs 150 \
+  --seed 42 \
+  --prefix gold_color
+```
+
+Output:
+
+```text
+data/processed/phrasecut_locked_attr_v1/gold_color_all.jsonl
+data/processed/phrasecut_locked_attr_v1/gold_color_dev.jsonl
+data/processed/phrasecut_locked_attr_v1/gold_color_test.jsonl
+data/processed/phrasecut_locked_attr_v1/gold_non_color_reference.jsonl
+data/processed/phrasecut_locked_attr_v1/summary.json
+```
+
+Counts:
+
+| Split | Pairs | Groups |
+| --- | ---: | ---: |
+| all color | 576 | 285 |
+| dev | 150 | 75 |
+| test | 426 | 210 |
+| non-color reference | 28 | n/a |
+
+Split unit:
+
+```text
+image_path + object_name + attribute_type + unordered(attribute_name_pos, attribute_name_neg)
+```
+
+Result:
+
+```text
+group_split_leakage_count = 0
+```
+
+Hashes and usage rules are recorded in:
+
+```text
+docs/BENCHMARKS.md
+```
+
+### Train image availability
+
+Initial train-only materialization:
+
+```bash
+.venv/bin/python tools/materialize_existing_records.py \
+  --input-manifest data/processed/phrasecut_full/manifest.jsonl \
+  --output-manifest data/processed/phrasecut_full/manifest_existing_train.jsonl \
+  --summary-json data/processed/phrasecut_full/manifest_existing_train_summary.json \
+  --keep-splits train \
+  --strip-missing-neg
+```
+
+Initial result:
+
+```text
+Kept 0 / 345486 records
+```
+
+This confirmed that `warm_refseg` should not start before addressing train image availability.
+
+Selective image download was then run for the images referenced by controlled attr train manifests:
+
+```bash
+.venv/bin/python tools/download_phrasecut_manifest_images.py \
+  --manifests \
+    data/processed/phrasecut_controlled_attr_full/gold_train.jsonl \
+    data/processed/phrasecut_controlled_attr_full/silver_train.jsonl \
+  --image-meta-json data/raw/phrasecut/VGPhraseCut_v0/image_data_split.json \
+  --images-dir data/raw/phrasecut/VGPhraseCut_v0/images \
+  --summary-json data/raw/phrasecut/VGPhraseCut_v0/download_attr_train_images_summary.json \
+  --workers 16 \
+  --skip-existing
+```
+
+Result:
+
+```text
+unique requested train images: 1122
+existing after download: 1122
+failures: 0
+```
+
+Train-only materialization after selective download:
+
+```text
+data/processed/phrasecut_full/manifest_existing_train.jsonl
+```
+
+Result:
+
+| Metric | Count |
+| --- | ---: |
+| train records kept | 6,090 |
+| attr records kept | 2,445 |
+| plain records kept | 3,498 |
+| relation records kept | 147 |
+
+### Leakage checks
+
+Commands:
+
+```bash
+.venv/bin/python tools/check_split_leakage.py \
+  --train-manifest data/processed/phrasecut_full/manifest_existing_train.jsonl \
+  --eval-manifest data/processed/phrasecut_locked_attr_v1/gold_color_dev.jsonl \
+  --summary-json runs/check_split_leakage_train_vs_gold_color_dev.json
+```
+
+```bash
+.venv/bin/python tools/check_split_leakage.py \
+  --train-manifest data/processed/phrasecut_full/manifest_existing_train.jsonl \
+  --eval-manifest data/processed/phrasecut_locked_attr_v1/gold_color_test.jsonl \
+  --summary-json runs/check_split_leakage_train_vs_gold_color_test.json
+```
+
+Results:
+
+```text
+train/dev overlap = 0
+train/test overlap = 0
+```
+
+### Run J: released SteerViT on locked color dev
+
+Output:
+
+```text
+runs/gate_sweep_phrasecut_locked_color_dev_released/summary.json
+```
+
+Metrics:
+
+| Gate | Flip acc | 95% CI | Mean gap |
+| ---: | ---: | ---: | ---: |
+| 0.00 | 0.5000 | [0.4200, 0.5800] | 0.00000 |
+| 0.25 | 0.6333 | [0.5600, 0.7067] | 0.00249 |
+| 0.50 | 0.8133 | [0.7467, 0.8733] | 0.00899 |
+| 0.75 | 0.8067 | [0.7400, 0.8667] | 0.01122 |
+| 1.00 | 0.8133 | [0.7467, 0.8733] | 0.01086 |
+
+Curve aggregates:
+
+```text
+flip_accuracy_augc = 0.72750
+mean_gap_augc = 0.00704
+```
+
+### Run K: released SteerViT on locked color test
+
+Output:
+
+```text
+runs/gate_sweep_phrasecut_locked_color_test_released/summary.json
+```
+
+Metrics:
+
+| Gate | Flip acc | 95% CI | Mean gap |
+| ---: | ---: | ---: | ---: |
+| 0.00 | 0.5000 | [0.4507, 0.5469] | 0.00000 |
+| 0.25 | 0.6338 | [0.5869, 0.6785] | 0.00262 |
+| 0.50 | 0.7793 | [0.7394, 0.8192] | 0.00981 |
+| 0.75 | 0.8333 | [0.7958, 0.8685] | 0.01280 |
+| 1.00 | 0.8357 | [0.7981, 0.8709] | 0.01247 |
+
+Curve aggregates:
+
+```text
+flip_accuracy_augc = 0.72858
+mean_gap_augc = 0.00787
+```
+
+### Decision
+
+Proceed to the `warm_refseg` sanity run, using:
+
+```text
+train: data/processed/phrasecut_full/manifest_existing_train.jsonl
+locked eval/dev: data/processed/phrasecut_locked_attr_v1/gold_color_dev.jsonl
+locked test: data/processed/phrasecut_locked_attr_v1/gold_color_test.jsonl
+```
+
+Use dev for checkpoint selection. Keep test for milestone reporting only.
+
+### Run L: warm_refseg locked-eval smoke
+
+Purpose:
+
+```text
+Verify that train/train_refseg.py can train on the materialized train subset,
+run the locked dev eval hook, and write checkpoint_best.pt.
+This is not a result run.
+```
+
+Command:
+
+```bash
+.venv/bin/python train/train_refseg.py \
+  --config configs/warm_refseg.yaml \
+  --train-manifest data/processed/phrasecut_full/manifest_existing_train.jsonl \
+  --eval-manifest data/processed/phrasecut_locked_attr_v1/gold_color_dev.jsonl \
+  --checkpoint /home/cvrt/.cache/huggingface/hub/models--JonaRuthardt--SteerViT/snapshots/cdc29ddb5ddb8cfb6c0194c461eba14309b5afc7/steervit_dinov2_base.pth \
+  --output-dir runs/warm_refseg_locked_eval_smoke \
+  --best-metric flip_acc \
+  --best-tiebreak mean_gap \
+  --override max_steps=2 batch_size=2 eval_batch_size=4 num_workers=0 eval_every=1 save_every=999999 lr=1e-4
+```
+
+Result:
+
+```text
+locked_num_pairs = 150
+locked_flip_accuracy = 0.8133
+locked_mean_gap = 0.01086
+checkpoint_best.pt written
+```
+
+Decision:
+
+```text
+The 5k warm_refseg sanity run is unblocked.
+```
+
 ### Run F: PhraseCut miniv controlled attr mining smoke
 
 Output:

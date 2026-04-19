@@ -3,6 +3,7 @@ from .metrics import (
     compute_binary_iou,
     compute_flip_accuracy,
     heatmap_mass_gap,
+    normalized_trapz_area,
 )
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     "compute_binary_iou",
     "compute_flip_accuracy",
     "heatmap_mass_gap",
+    "normalized_trapz_area",
 ]

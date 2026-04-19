@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from typing import Iterable
 
 import torch
 
@@ -30,3 +31,35 @@ def aggregate_scalar_metrics(rows: list[dict]) -> dict[str, float]:
                 if math.isfinite(float(value)):
                     bucket[key].append(float(value))
     return {k: sum(v) / len(v) for k, v in bucket.items() if v}
+
+
+def normalized_trapz_area(xs: Iterable[float], ys: Iterable[float]) -> float | None:
+    """
+    Normalized trapezoidal area under a 1D curve.
+
+    Returns None when fewer than 2 distinct x-values are available.
+    The output is normalized by the x-range so a constant curve y=c has area c.
+    """
+    pairs = sorted((float(x), float(y)) for x, y in zip(xs, ys))
+    if len(pairs) < 2:
+        return None
+
+    deduped: list[tuple[float, float]] = []
+    for x, y in pairs:
+        if deduped and abs(deduped[-1][0] - x) < 1e-12:
+            deduped[-1] = (x, y)
+        else:
+            deduped.append((x, y))
+
+    if len(deduped) < 2:
+        return None
+
+    x0, _ = deduped[0]
+    x1, _ = deduped[-1]
+    if abs(x1 - x0) < 1e-12:
+        return None
+
+    area = 0.0
+    for (xa, ya), (xb, yb) in zip(deduped[:-1], deduped[1:]):
+        area += 0.5 * (ya + yb) * (xb - xa)
+    return float(area / (x1 - x0))

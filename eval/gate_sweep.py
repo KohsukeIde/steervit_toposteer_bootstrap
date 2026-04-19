@@ -13,7 +13,12 @@ from tqdm import tqdm
 
 from toposteer.config import deep_update, load_yaml, parse_override_pairs
 from toposteer.datasets import UnifiedRefExpDataset, collate_refexp
-from toposteer.evaluation import aggregate_scalar_metrics, compute_flip_accuracy, heatmap_mass_gap
+from toposteer.evaluation import (
+    aggregate_scalar_metrics,
+    compute_flip_accuracy,
+    heatmap_mass_gap,
+    normalized_trapz_area,
+)
 from toposteer.losses.counterfactual import pairwise_mask_scores
 from toposteer.models import SteerViTTrainable
 from toposteer.utils import ensure_dir, patchify_soft_mask, seed_everything, write_json, write_jsonl
@@ -47,16 +52,6 @@ def save_overlay(image_tensor: torch.Tensor, heatmap_2d: torch.Tensor, out_path:
     plt.close()
 
 
-def summarize_rows(rows: list[dict]) -> dict:
-    summary = aggregate_scalar_metrics(rows)
-    if rows and any(r["has_neg"] for r in rows):
-        pos_scores = torch.tensor([r["pos_score"] for r in rows if r["has_neg"]], dtype=torch.float32)
-        neg_scores = torch.tensor([r["neg_score"] for r in rows if r["has_neg"]], dtype=torch.float32)
-        summary["flip_accuracy"] = compute_flip_accuracy(pos_scores, neg_scores)
-        summary["mean_gap"] = heatmap_mass_gap(pos_scores, neg_scores)
-    return summary
-
-
 def bootstrap_flip_accuracy(pos_scores: np.ndarray, neg_scores: np.ndarray, num_samples: int, seed: int = 42) -> dict[str, float]:
     if len(pos_scores) == 0 or num_samples <= 0:
         return {}
@@ -71,6 +66,42 @@ def bootstrap_flip_accuracy(pos_scores: np.ndarray, neg_scores: np.ndarray, num_
         "flip_accuracy_ci_low": float(np.quantile(values, 0.025)),
         "flip_accuracy_ci_high": float(np.quantile(values, 0.975)),
     }
+
+
+def compute_curve_aggregates(summaries: list[dict]) -> dict[str, object]:
+    valid = [s for s in summaries if "flip_accuracy" in s]
+    if len(valid) < 2:
+        return {}
+
+    gates = [float(s["gate_factor"]) for s in valid]
+    accs = [float(s["flip_accuracy"]) for s in valid]
+    gaps = [float(s["mean_gap"]) for s in valid if "mean_gap" in s]
+    out: dict[str, object] = {
+        "flip_accuracy_augc": normalized_trapz_area(gates, accs),
+    }
+    if len(gaps) == len(gates):
+        out["mean_gap_augc"] = normalized_trapz_area(gates, gaps)
+
+    families = sorted({family for s in valid for family in s.get("by_family", {}).keys()})
+    by_family_augc: dict[str, dict[str, float | int | None]] = {}
+    for family in families:
+        fam_pairs = []
+        for s in valid:
+            fam = s.get("by_family", {}).get(family)
+            if fam is None:
+                continue
+            fam_pairs.append((float(s["gate_factor"]), float(fam["flip_accuracy"]), int(fam["n"])))
+        if len(fam_pairs) < 2:
+            continue
+        fam_pairs = sorted(fam_pairs, key=lambda x: x[0])
+        by_family_augc[family] = {
+            "flip_accuracy_augc": normalized_trapz_area([x[0] for x in fam_pairs], [x[1] for x in fam_pairs]),
+            "min_n": min(x[2] for x in fam_pairs),
+            "max_n": max(x[2] for x in fam_pairs),
+        }
+    if by_family_augc:
+        out["by_family"] = by_family_augc
+    return out
 
 
 def main() -> None:
@@ -162,23 +193,37 @@ def main() -> None:
                         )
                         overlay_budget -= 1
 
-        summary = summarize_rows(rows)
+        summary = aggregate_scalar_metrics(rows)
         valid_rows = [r for r in rows if r["has_neg"]]
         if valid_rows:
             pos_arr = np.asarray([r["pos_score"] for r in valid_rows], dtype=np.float32)
             neg_arr = np.asarray([r["neg_score"] for r in valid_rows], dtype=np.float32)
+            pos_scores_t = torch.from_numpy(pos_arr)
+            neg_scores_t = torch.from_numpy(neg_arr)
+            summary["flip_accuracy"] = compute_flip_accuracy(pos_scores_t, neg_scores_t)
+            summary["mean_gap"] = heatmap_mass_gap(pos_scores_t, neg_scores_t)
             summary.update(bootstrap_flip_accuracy(pos_arr, neg_arr, bootstrap_samples, seed=cfg.get("seed", 42)))
 
-        family_rows = defaultdict(list)
-        for row in valid_rows:
-            family_rows[row.get("family", "unknown")].append(row)
-        summary["by_family"] = {family: summarize_rows(fam_rows) for family, fam_rows in sorted(family_rows.items())}
+            by_family: dict[str, dict[str, float]] = {}
+            grouped: dict[str, list[dict]] = defaultdict(list)
+            for row in valid_rows:
+                grouped[row["family"]].append(row)
+            for family, family_rows in grouped.items():
+                fp = torch.tensor([r["pos_score"] for r in family_rows], dtype=torch.float32)
+                fn = torch.tensor([r["neg_score"] for r in family_rows], dtype=torch.float32)
+                by_family[family] = {
+                    "n": len(family_rows),
+                    "flip_accuracy": compute_flip_accuracy(fp, fn),
+                    "mean_gap": heatmap_mass_gap(fp, fn),
+                }
+            summary["by_family"] = by_family
 
         summary["gate_factor"] = float(gate_factor)
         all_summary.append(summary)
         per_factor_records[float(gate_factor)] = rows
 
-    write_json(output_dir / "summary.json", {"summaries": all_summary})
+    curve_aggregates = compute_curve_aggregates(all_summary)
+    write_json(output_dir / "summary.json", {"summaries": all_summary, "curve_aggregates": curve_aggregates})
     flat_rows = [row for rows in per_factor_records.values() for row in rows]
     write_jsonl(output_dir / "per_sample.jsonl", flat_rows)
     print(f"Wrote results to {output_dir}")
