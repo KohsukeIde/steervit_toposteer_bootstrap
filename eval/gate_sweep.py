@@ -29,6 +29,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--base-checkpoint",
+        default=None,
+        help="Required when --checkpoint is a TopoSteer training checkpoint with model_state_dict.",
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
@@ -117,6 +122,7 @@ def main() -> None:
 
     model = SteerViTTrainable(
         checkpoint=args.checkpoint,
+        base_checkpoint=args.base_checkpoint,
         device=cfg.get("device", "cuda"),
         trainable_modules=(),
     )

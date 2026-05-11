@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 import torch
@@ -36,13 +37,63 @@ class SteerViTTrainable(nn.Module):
         checkpoint: str,
         device: str | torch.device = "cpu",
         trainable_modules: Iterable[str] | None = None,
+        base_checkpoint: str | None = None,
     ):
         super().__init__()
-        self.model = SteerViT.from_pretrained(checkpoint, device=device)
+        train_state = self._load_train_checkpoint_if_needed(checkpoint)
+        release_checkpoint = base_checkpoint
+        if train_state is not None:
+            release_checkpoint = release_checkpoint or train_state.get("base_checkpoint")
+            release_checkpoint = release_checkpoint or train_state.get("config", {}).get("base_checkpoint")
+            if release_checkpoint is None:
+                raise ValueError(
+                    "TopoSteer training checkpoints require --base-checkpoint so the SteerViT "
+                    "architecture can be initialized before loading model_state_dict."
+                )
+        else:
+            release_checkpoint = checkpoint
+
+        self.model = self._load_release_model(str(release_checkpoint), device=device)
         self.device_name = torch.device(device)
         self.trainable_modules = tuple(trainable_modules or ("gated_cross_attn", "connector", "lin_seg_head"))
         self._freeze_all()
+        if train_state is not None:
+            missing, unexpected = self.load_state_dict(train_state["model_state_dict"], strict=False)
+            if unexpected:
+                raise RuntimeError(f"Unexpected keys while loading training checkpoint: {unexpected[:20]}")
+            if missing:
+                # Missing keys are acceptable only for forward-compatible additions. Surface a compact warning.
+                print({"training_checkpoint_missing_keys": missing[:20], "num_missing": len(missing)})
         self._unfreeze_requested_modules()
+
+    @staticmethod
+    def _load_train_checkpoint_if_needed(checkpoint: str) -> dict | None:
+        path = Path(checkpoint)
+        if not path.is_file():
+            return None
+        state = torch.load(path, map_location="cpu", weights_only=False)
+        if isinstance(state, dict) and "model_state_dict" in state:
+            return state
+        return None
+
+    @staticmethod
+    def _load_release_model(checkpoint: str, device: str | torch.device | None = None):
+        path = Path(checkpoint)
+        if not path.is_file():
+            return SteerViT.from_pretrained(checkpoint, device=device)
+
+        state = torch.load(path, map_location="cpu", weights_only=False)
+        if not (isinstance(state, dict) and "config" in state and "state_dict" in state):
+            raise ValueError(f"Expected a SteerViT release checkpoint at {checkpoint}.")
+
+        model = SteerViT(state["config"])
+        model.load_state_dict(state["state_dict"], strict=False)
+        for param in model.parameters():
+            param.requires_grad = False
+        model.eval()
+        if device is not None:
+            model = model.to(device)
+        return model
 
     def _freeze_all(self) -> None:
         for param in self.model.parameters():

@@ -599,6 +599,297 @@ Result:
 7 passed
 ```
 
+## 2026-04-19 Locked Color Benchmark And Warm Runs
+
+### Locked benchmark split
+
+The full gold attr benchmark was split into a color-first locked benchmark:
+
+```bash
+.venv/bin/python tools/split_locked_attr_benchmark.py \
+  --input-manifest data/processed/phrasecut_controlled_attr_full/gold_eval.jsonl \
+  --output-dir data/processed/phrasecut_locked_attr_v1
+```
+
+Outputs:
+
+| Manifest | Pairs | SHA256 |
+| --- | ---: | --- |
+| `gold_color_dev.jsonl` | 150 | `1493e1baf37d18562c0d71401fa337f118cdd5781145dc347b80bad0f72a46b2` |
+| `gold_color_test.jsonl` | 426 | `784cbdb5c5bc52928fa224b049b5589f9cca43f2abb23531452ef88d5baaa3c5` |
+| `gold_non_color_reference.jsonl` | 28 | `21d63daffd35b75ea800c7a0ba1cf4b55e0dd4706b5988922df05a7033ee902b` |
+
+Image-group leakage in the split: `0`.
+
+Policy:
+
+- `gold_color_dev` is for milestone monitoring only.
+- `gold_color_test` is locked and should not be used for checkpoint selection.
+- Non-color examples are reference-only until size/material/state have more support.
+
+### Train image materialization
+
+Attribute-train images were downloaded only for the controlled attr train manifests:
+
+```bash
+.venv/bin/python tools/download_phrasecut_manifest_images.py \
+  --manifests \
+    data/processed/phrasecut_controlled_attr_full/gold_train.jsonl \
+    data/processed/phrasecut_controlled_attr_full/silver_train.jsonl \
+  --image-meta-json data/raw/phrasecut/VGPhraseCut_v0/image_data_split.json \
+  --images-dir data/raw/phrasecut/VGPhraseCut_v0/images
+```
+
+Result:
+
+| Metric | Count |
+| --- | ---: |
+| unique requested train images | 1,122 |
+| existing after download | 1,122 |
+| failures | 0 |
+
+Positive-only train records currently available:
+
+```bash
+.venv/bin/python tools/materialize_existing_records.py \
+  --input-manifest data/processed/phrasecut_full/manifest.jsonl \
+  --output-manifest data/processed/phrasecut_full/manifest_existing_train.jsonl \
+  --summary-json data/processed/phrasecut_full/manifest_existing_train_summary.json \
+  --strip-missing-neg \
+  --keep-splits train
+```
+
+Result: `6,090` train records, with `1,122` train image keys.
+
+Leakage checks:
+
+| Train manifest | Eval manifest | Overlap |
+| --- | --- | ---: |
+| `phrasecut_full/manifest_existing_train.jsonl` | `gold_color_dev.jsonl` | 0 |
+| `phrasecut_full/manifest_existing_train.jsonl` | `gold_color_test.jsonl` | 0 |
+| `silver_train_existing.jsonl` | `gold_color_dev.jsonl` | 0 |
+| `silver_train_existing.jsonl` | `gold_color_test.jsonl` | 0 |
+
+### Released checkpoint baseline on locked color split
+
+Outputs:
+
+```text
+runs/gate_sweep_phrasecut_locked_color_dev_released/summary.json
+runs/gate_sweep_phrasecut_locked_color_test_released/summary.json
+```
+
+| Split | Acc@1.0 | 95% CI | Mean gap@1.0 | Acc AUGC | Gap AUGC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| dev | 0.8133 | [0.747, 0.873] | 0.01086 | 0.7275 | 0.00704 |
+| test | 0.8357 | [0.798, 0.871] | 0.01247 | 0.7286 | 0.00787 |
+
+Interpretation:
+
+The color-only locked split preserves the released-checkpoint signal. Gate `0.0` remains chance, and gate `1.0` is strongly above chance.
+
+### Implementation update for train checkpoint evaluation
+
+`SteerViTTrainable`, `eval/gate_sweep.py`, and `train/train_refseg.py` now support TopoSteer training checkpoints through `--base-checkpoint`.
+
+This is needed because training outputs store wrapper-form `model_state_dict`, while released SteerViT checkpoints store upstream `state_dict`.
+
+Verification after the loader update:
+
+```bash
+.venv/bin/python -m compileall src tools eval train tests
+.venv/bin/python -m pytest tests
+```
+
+Result:
+
+```text
+11 passed
+```
+
+### Warm refseg, positive-only
+
+Command:
+
+```bash
+.venv/bin/python train/train_refseg.py \
+  --config configs/warm_refseg.yaml \
+  --train-manifest data/processed/phrasecut_full/manifest_existing_train.jsonl \
+  --eval-manifest data/processed/phrasecut_locked_attr_v1/gold_color_dev.jsonl \
+  --checkpoint /home/cvrt/.cache/huggingface/hub/models--JonaRuthardt--SteerViT/snapshots/cdc29ddb5ddb8cfb6c0194c461eba14309b5afc7/steervit_dinov2_base.pth \
+  --output-dir runs/warm_refseg_phrasecut_locked_color_5k \
+  --best-metric flip_acc \
+  --best-tiebreak mean_gap \
+  --override max_steps=5000 lr=1e-4 eval_every=250 save_every=1000
+```
+
+Best dev checkpoint:
+
+```text
+runs/warm_refseg_phrasecut_locked_color_5k/checkpoint_best.pt
+step = 1250
+locked_flip_accuracy = 0.9000
+locked_mean_gap = 0.01769
+```
+
+Final checkpoint:
+
+```text
+runs/warm_refseg_phrasecut_locked_color_5k/checkpoint_final.pt
+step = 5000
+```
+
+Gate-sweep results:
+
+| Run | Split | Acc@1.0 | 95% CI | Mean gap@1.0 | Acc AUGC | Gap AUGC |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| released | dev | 0.8133 | [0.747, 0.873] | 0.01086 | 0.7275 | 0.00704 |
+| released | test | 0.8357 | [0.798, 0.871] | 0.01247 | 0.7286 | 0.00787 |
+| warm_refseg best | dev | 0.9000 | [0.853, 0.947] | 0.01769 | 0.7517 | 0.00971 |
+| warm_refseg best | test | 0.8638 | [0.833, 0.897] | 0.01950 | 0.7391 | 0.01057 |
+| warm_refseg final | dev | 0.8800 | [0.827, 0.927] | 0.02252 | 0.7625 | 0.01287 |
+| warm_refseg final | test | 0.8732 | [0.840, 0.904] | 0.02408 | 0.7556 | 0.01431 |
+
+Interpretation:
+
+Positive-only warm refseg is a clear GO. It improves locked color test accuracy, widens the heatmap mass gap, and increases curve area. The dev-selected best checkpoint has the highest dev accuracy, but the final checkpoint has better test accuracy and stronger AUGC, so the useful effect is not merely dev overfitting.
+
+Working hypothesis:
+
+Positive referential supervision improves the localization/readout calibration of SteerViT's existing color-conditional signal. It does not need an explicit counterfactual loss to improve the locked color flip benchmark.
+
+### Warm CF, color-only silver train
+
+Color-only silver train manifest:
+
+```text
+data/processed/phrasecut_controlled_attr_full/silver_train_color_existing.jsonl
+```
+
+Counts:
+
+| Metric | Count |
+| --- | ---: |
+| silver train pairs | 2,430 |
+| color-only pairs | 2,324 |
+| missing image/mask records | 0 |
+
+#### CF weight 1.0
+
+Command:
+
+```bash
+.venv/bin/python train/train_refseg.py \
+  --config configs/warm_cf.yaml \
+  --train-manifest data/processed/phrasecut_controlled_attr_full/silver_train_color_existing.jsonl \
+  --eval-manifest data/processed/phrasecut_locked_attr_v1/gold_color_dev.jsonl \
+  --checkpoint runs/warm_refseg_phrasecut_locked_color_5k/checkpoint_final.pt \
+  --base-checkpoint /home/cvrt/.cache/huggingface/hub/models--JonaRuthardt--SteerViT/snapshots/cdc29ddb5ddb8cfb6c0194c461eba14309b5afc7/steervit_dinov2_base.pth \
+  --output-dir runs/warm_cf_color_from_refseg_final_2k_cf_only \
+  --best-metric flip_acc \
+  --best-tiebreak mean_gap \
+  --override max_steps=2000 lr=5e-5 eval_every=250 save_every=1000 \
+    loss.cf_margin=0.005 loss.use_background=False loss.bg_weight=0.0
+```
+
+Stopped early after dev degradation. Best saved checkpoint:
+
+```text
+step = 250
+locked_flip_accuracy = 0.8533
+locked_mean_gap = 0.02500
+```
+
+Test gate sweep:
+
+```text
+runs/gate_sweep_phrasecut_locked_color_test_warm_cf_color_cf_only_best/summary.json
+```
+
+| Run | Split | Acc@1.0 | 95% CI | Mean gap@1.0 | Acc AUGC | Gap AUGC |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| warm_refseg final | test | 0.8732 | [0.840, 0.904] | 0.02408 | 0.7556 | 0.01431 |
+| warm_cf w=1.0 best | test | 0.8615 | [0.829, 0.894] | 0.02730 | 0.7488 | 0.01528 |
+
+#### CF weight 0.1
+
+Command:
+
+```bash
+.venv/bin/python train/train_refseg.py \
+  --config configs/warm_cf.yaml \
+  --train-manifest data/processed/phrasecut_controlled_attr_full/silver_train_color_existing.jsonl \
+  --eval-manifest data/processed/phrasecut_locked_attr_v1/gold_color_dev.jsonl \
+  --checkpoint runs/warm_refseg_phrasecut_locked_color_5k/checkpoint_final.pt \
+  --base-checkpoint /home/cvrt/.cache/huggingface/hub/models--JonaRuthardt--SteerViT/snapshots/cdc29ddb5ddb8cfb6c0194c461eba14309b5afc7/steervit_dinov2_base.pth \
+  --output-dir runs/warm_cf_color_from_refseg_final_1k_cf_w01 \
+  --best-metric flip_acc \
+  --best-tiebreak mean_gap \
+  --override max_steps=1000 lr=2e-5 eval_every=250 save_every=1000 \
+    loss.cf_margin=0.005 loss.cf_weight=0.1 loss.use_background=False loss.bg_weight=0.0
+```
+
+Best dev checkpoint:
+
+```text
+step = 250
+locked_flip_accuracy = 0.8667
+locked_mean_gap = 0.02553
+```
+
+Test gate sweep:
+
+```text
+runs/gate_sweep_phrasecut_locked_color_test_warm_cf_color_cf_w01_best/summary.json
+```
+
+| Run | Split | Acc@1.0 | 95% CI | Mean gap@1.0 | Acc AUGC | Gap AUGC |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| warm_refseg final | test | 0.8732 | [0.840, 0.904] | 0.02408 | 0.7556 | 0.01431 |
+| warm_cf w=0.1 best | test | 0.8732 | [0.843, 0.904] | 0.02758 | 0.7503 | 0.01503 |
+
+Interpretation:
+
+Naive CF is not a GO yet. It consistently increases the mean gap, but it does not improve flip accuracy or AUGC over positive-only `warm_refseg final`. The lower-weight run preserves Acc@1.0 but still reduces AUGC.
+
+Updated hypothesis:
+
+The silver counterfactual pairs are useful as a separation pressure, but the current margin loss is too blunt for ranking quality. It appears to over-amplify already separable pairs and does not distinguish noisy/easy silver negatives from genuinely informative ones. The next CF attempt should use a gated or mined-hard subset, not all silver color pairs uniformly.
+
+### Decision
+
+Current mainline checkpoint:
+
+```text
+runs/warm_refseg_phrasecut_locked_color_5k/checkpoint_final.pt
+```
+
+Current mainline metrics:
+
+```text
+locked color test Acc@1.0 = 0.8732
+locked color test Acc AUGC = 0.7556
+locked color test mean gap@1.0 = 0.02408
+```
+
+Go:
+
+- Keep `warm_refseg final` as the current best mainline.
+- Use color locked dev/test as the primary v1 benchmark.
+- Treat naive CF as negative evidence for the current formulation, not as a failed project.
+
+No-go for now:
+
+- Do not add topology loss yet.
+- Do not move to Franca yet.
+- Do not use all silver CF pairs uniformly.
+
+Next:
+
+1. Add a hard-pair miner over silver train based on released/warm_refseg gap, selecting ambiguous pairs near the decision boundary.
+2. Try CF only on the hard subset, with a lower margin or soft/listwise weighting.
+3. Add an error browser for locked color failures before changing architecture.
+
 ## 2026-04-19: Locked color dev/test and train availability
 
 ### Goal

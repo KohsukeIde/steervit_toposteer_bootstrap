@@ -39,6 +39,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional locked paired benchmark used only for model selection / monitoring.",
     )
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--base-checkpoint",
+        default=None,
+        help="Required when --checkpoint is a TopoSteer training checkpoint with model_state_dict.",
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--best-metric", type=str, default=None)
@@ -274,6 +279,7 @@ def main() -> None:
         "val_factor": val_gate_factor,
         "locked_eval_factor": locked_gate_factor,
     }
+    resolved_config["base_checkpoint"] = args.base_checkpoint or args.checkpoint
     write_json(output_dir / "resolved_config.json", resolved_config)
 
     trainable_modules = []
@@ -291,6 +297,7 @@ def main() -> None:
 
     model = SteerViTTrainable(
         checkpoint=args.checkpoint,
+        base_checkpoint=args.base_checkpoint,
         device=cfg.get("device", "cuda"),
         trainable_modules=trainable_modules,
     )
