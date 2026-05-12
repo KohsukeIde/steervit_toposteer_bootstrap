@@ -1,0 +1,22 @@
+# Pre-registered success criteria for the tighter-entity-bank probe.
+# If these fail after the timebox, prefer the negative-result / wedge-A pivot.
+timebox_note: "Two-week time box from the first tighter-bank run. If still failing, pivot to patch-level phenomenon framing."
+decision_note: "Bank cleanup gets one serious retry, not an infinite series of ever-tighter filters."
+fallback_wedge: "Wedge A: prompt steering edits patch-level topology but does not naturally lift to entity-level abstraction."
+criteria:
+  - name: entity localized diff becomes positive
+    metric: entity_pos_neg_localized_edit_diff_k5
+    op: ">"
+    value: 0.0
+  - name: entity far drift is not worse than baseline
+    metric: entity_pos_neg_neighbor_flip_rate_k5_far
+    op: "<="
+    baseline_metric: entity_pos_neg_neighbor_flip_rate_k5_far
+  - name: entity target-distractor hit@5 is not worse than baseline
+    metric: entity_pos_target_to_distractor_rank_hit_at_5
+    op: ">="
+    baseline_metric: entity_pos_target_to_distractor_rank_hit_at_5
+  - name: patch localized diff stays positive
+    metric: patch_pos_neg_localized_edit_diff_k5
+    op: ">"
+    value: 0.0

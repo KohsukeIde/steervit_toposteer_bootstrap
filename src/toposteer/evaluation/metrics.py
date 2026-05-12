@@ -4,6 +4,7 @@ import math
 from collections import defaultdict
 from typing import Iterable
 
+import numpy as np
 import torch
 
 
@@ -63,3 +64,58 @@ def normalized_trapz_area(xs: Iterable[float], ys: Iterable[float]) -> float | N
     for (xa, ya), (xb, yb) in zip(deduped[:-1], deduped[1:]):
         area += 0.5 * (ya + yb) * (xb - xa)
     return float(area / (x1 - x0))
+
+
+def bootstrap_mean_ci(
+    values: Iterable[float],
+    samples: int = 2000,
+    seed: int = 0,
+    ci: float = 0.95,
+) -> dict[str, float | int | None]:
+    arr = np.asarray(
+        [float(v) for v in values if v is not None and math.isfinite(float(v))],
+        dtype=np.float64,
+    )
+    if arr.size == 0:
+        return {"mean": None, "ci_low": None, "ci_high": None, "num_values": 0, "num_bootstrap_samples": int(samples)}
+    mean = float(arr.mean())
+    if arr.size == 1 or samples <= 1:
+        return {
+            "mean": mean,
+            "ci_low": mean,
+            "ci_high": mean,
+            "num_values": int(arr.size),
+            "num_bootstrap_samples": int(samples),
+        }
+
+    rng = np.random.default_rng(int(seed))
+    boots = np.empty(int(samples), dtype=np.float64)
+    for i in range(int(samples)):
+        idx = rng.integers(0, arr.size, size=arr.size)
+        boots[i] = arr[idx].mean()
+    alpha = max(0.0, min(1.0, (1.0 - float(ci)) / 2.0))
+    return {
+        "mean": mean,
+        "ci_low": float(np.quantile(boots, alpha)),
+        "ci_high": float(np.quantile(boots, 1.0 - alpha)),
+        "num_values": int(arr.size),
+        "num_bootstrap_samples": int(samples),
+    }
+
+
+def summarize_bootstrap_metrics(
+    rows: list[dict],
+    keys: Iterable[str],
+    samples: int = 2000,
+    seed: int = 0,
+    ci: float = 0.95,
+) -> dict[str, dict[str, float | int | None]]:
+    out = {}
+    for key in keys:
+        values = []
+        for row in rows:
+            value = row.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
+                values.append(float(value))
+        out[str(key)] = bootstrap_mean_ci(values, samples=samples, seed=seed, ci=ci)
+    return out

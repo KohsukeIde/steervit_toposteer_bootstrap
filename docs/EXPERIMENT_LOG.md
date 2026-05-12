@@ -1021,6 +1021,133 @@ Decision:
 - Next topology job should build a tighter entity bank: same-object / same-category / color-bearing regions only, plus an error browser for failures.
 - Do not add topology loss or Franca until entity localization is cleaner.
 
+## 2026-05-12 Timeboxed Tighter Entity Bank Probe
+
+### Goal
+
+Run the pre-registered falsification step: if a tighter entity bank still does not produce stable entity-level localized topology editing, do not keep tuning topology/entity claims indefinitely. Pivot toward the patch-level phenomenon framing.
+
+### Implementation
+
+Added:
+
+| Path | Purpose |
+| --- | --- |
+| `tools/render_topology_failure_browser.py` | HTML browser for worst topology cases with target/distractor mask overlays. |
+| `tools/build_phrasecut_pair_bank.py` | Pair-specific banks filtered by object/attribute constraints. |
+| `tools/build_phrasecut_region_bank_tight.py` | Pair-specific same-object context banks. |
+| `tools/check_topology_success.py` | Summary and per-pair bootstrap go/no-go checker. |
+| `configs/topology_success_entity.yaml` | Pre-registered entity success criteria. |
+| `configs/topology_rearrangement_tighter_bank.yaml` | Topology probe config with bootstrap summaries. |
+
+Verification:
+
+```text
+compileall OK
+pytest: 20 passed
+```
+
+### Failure Browser
+
+Rendered full-bank warm_refseg failures:
+
+```text
+runs/failure_browser_locked_color_test_warm_refseg_entity_locdiff/index.html
+```
+
+Rendered same-object-context failures:
+
+```text
+runs/failure_browser_locked_color_test_warm_refseg_tight_same_object_context/index.html
+```
+
+### Tighter Banks
+
+| Bank | Split | Pair banks | Evaluated pairs | Mean regions/pair | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| strict same-object color-bearing | test | 426 | not run | 2.67 | 266 pairs have only 2 nodes, too small for stable graph metrics. |
+| image-level color context | test | 426 | 388 | 5.74 | Good coverage, but context is broader than same-object. |
+| same-object context | test | 426 | 212 | 3.01 | Semantically tight, but small effective subset. |
+| same-object context | dev | 150 | 62 | 3.03-ish | Very small effective subset. |
+
+### Results
+
+Main metrics on locked color test:
+
+| Run | Bank | Pairs | Entity localized diff@5 | Entity local flip@5 | Entity far flip@5 | Target→distractor hit@5 | Patch localized diff@5 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| released | full image bank | 426 | -0.0047 | 0.1612 | 0.1860 | n/a | 0.0561 |
+| warm_refseg | full image bank | 426 | -0.0225 | 0.1876 | 0.2285 | n/a | 0.0411 |
+| released | image color context | 388 | -0.0382 | 0.0566 | 0.1077 | 0.9175 | 0.0565 |
+| warm_refseg | image color context | 388 | -0.0374 | 0.0724 | 0.1263 | 0.9149 | 0.0429 |
+| released | same-object context | 212 | -0.0171 | 0.0069 | 0.0333 | 0.9670 | 0.0557 |
+| warm_refseg | same-object context | 212 | 0.0115 | 0.0157 | 0.0254 | 0.9717 | 0.0495 |
+
+Same-object-context test summary criteria:
+
+```text
+runs/topology_rearrangement_locked_color_test_warm_refseg_tight_same_object_context/go_no_go.json
+PASS=True
+```
+
+However, the stricter per-pair bootstrap check fails:
+
+```text
+runs/topology_rearrangement_locked_color_test_warm_refseg_tight_same_object_context/go_no_go_per_pair_bootstrap.json
+PASS=False
+entity_pos_neg_localized_edit_diff_k5 mean = 0.0115
+95% CI = [-0.0144, 0.0379]
+```
+
+Dev same-object-context also fails:
+
+```text
+runs/topology_rearrangement_locked_color_dev_warm_refseg_tight_same_object_context/go_no_go.json
+PASS=False
+runs/topology_rearrangement_locked_color_dev_warm_refseg_tight_same_object_context/go_no_go_per_pair_bootstrap.json
+PASS=False
+```
+
+Dev failure reason:
+
+- Entity localized diff is positive on average, but its bootstrap CI crosses zero.
+- Far drift is worse than released baseline.
+- Effective sample is only 62 evaluated pairs, with 30 pairs contributing localized-diff values.
+
+### Interpretation
+
+This is not a clean entity-level LensGraph GO.
+
+What improved:
+
+- In the semantically tight same-object context bank, `warm_refseg` turns the test entity localized diff from negative to positive.
+- Same-object target→distractor hit@5 is preserved/slightly improved.
+- Far drift improves on test same-object context.
+
+Why this is still not enough:
+
+- The positive same-object-context signal is small and not bootstrap-stable.
+- Dev does not pass the registered criteria.
+- The effective same-object graph subset is small because many pairs have only the two endpoints.
+- Broader image-level color context fails, which argues against scene-wide entity topology surgery.
+
+Updated hypothesis:
+
+The current model shows **object-local color-sensitive entity movement**, not robust scene-level entity topology editing. The stronger LensGraph claim should be paused. The stable result remains: prompt steering edits dense patch-token topology, and warm_refseg improves grounding/readout plus a weak same-object entity effect.
+
+Decision:
+
+- Do not add topology loss yet.
+- Do not move to Franca yet.
+- Treat entity-level LensGraph as timeboxed and currently unproven.
+- Main paper wedge should shift toward: **prompt-conditioned patch topology editing with object-local entity traces**, rather than full entity-graph surgery.
+
+Next:
+
+1. Use the failure browsers to categorize annotation/bank failures.
+2. If continuing entity work, first expand same-object context examples; do not tune losses against the current 62/212 effective subset.
+3. Otherwise pivot to patch-level topology as the primary phenomenon and keep entity analysis as a cautious appendix.
+
 ## 2026-04-19: Locked color dev/test and train availability
 
 ### Goal

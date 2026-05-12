@@ -10,6 +10,15 @@ from .mask_ops import (
     save_binary_mask,
 )
 from .seed import seed_everything
+from .phrasecut_filters import (
+    candidate_attr_types,
+    canonicalize_attribute_name,
+    extract_canonical_attrs,
+    has_relations,
+    normalize_object_name,
+    normalize_text,
+    object_name_of,
+)
 
 __all__ = [
     "ensure_dir",
@@ -26,4 +35,11 @@ __all__ = [
     "polygons_to_mask",
     "save_binary_mask",
     "seed_everything",
+    "candidate_attr_types",
+    "canonicalize_attribute_name",
+    "extract_canonical_attrs",
+    "has_relations",
+    "normalize_object_name",
+    "normalize_text",
+    "object_name_of",
 ]

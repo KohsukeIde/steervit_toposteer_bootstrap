@@ -14,8 +14,10 @@ from toposteer.config import deep_update, load_yaml, parse_override_pairs
 from toposteer.evaluation import (
     cosine_similarity_matrix,
     entity_local_far_masks,
+    index_region_bank,
     masked_token_pool,
     pca_project_2d,
+    resolve_bank_entry,
     record_image_key,
     topk_neighbor_indices,
 )
@@ -28,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True)
     parser.add_argument("--manifest", required=True, help="Paired eval manifest, e.g. gold_eval.jsonl")
     parser.add_argument("--region-bank", required=True)
+    parser.add_argument("--pair-bank", default=None, help="Optional tighter pair bank JSONL keyed by pair_id")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--base-checkpoint", default=None)
     parser.add_argument("--output-dir", required=True)
@@ -44,9 +47,22 @@ def load_patch_mask(mask_path: str | Path, image_transform, patch_grid: tuple[in
     return mask, patch_mask
 
 
-def load_region_bank(path: str | Path) -> dict[str, dict[str, Any]]:
+def load_region_bank(path: str | Path) -> dict[str, dict[str, dict[str, Any]]]:
     rows = read_jsonl(path)
-    return {str(row["image_key"]): row for row in rows}
+    return index_region_bank(rows)
+
+
+def load_pair_bank(path: str | Path) -> dict[str, dict[str, Any]]:
+    rows = read_jsonl(path)
+    return {str(row.get("pair_id") or row.get("id")): row for row in rows}
+
+
+def resolve_bank_entry(pair: dict[str, Any], image_bank: dict[str, dict[str, Any]], pair_bank: dict[str, dict[str, Any]] | None = None) -> tuple[str, dict[str, Any] | None]:
+    pair_id = str(pair.get("id"))
+    if pair_bank is not None and pair_id in pair_bank:
+        return f"pair:{pair_id}", pair_bank[pair_id]
+    image_key = record_image_key(pair)
+    return f"image:{image_key}", image_bank.get(image_key)
 
 
 def infer_pair(records: list[dict[str, Any]], pair_id: str | None, pair_index: int) -> dict[str, Any]:
@@ -132,8 +148,9 @@ def main() -> None:
     pair_records = read_jsonl(args.manifest)
     pair = infer_pair(pair_records, pair_id=args.pair_id, pair_index=args.pair_index)
     bank = load_region_bank(args.region_bank)
+    pair_bank = load_pair_bank(args.pair_bank) if args.pair_bank else None
     image_key = record_image_key(pair)
-    bank_entry = bank.get(image_key)
+    bank_key, bank_entry = resolve_bank_entry(pair, bank, pair_bank)
     if bank_entry is None:
         raise ValueError(f"No bank entry found for image_key={image_key}")
 
@@ -225,7 +242,9 @@ def main() -> None:
             "figure_knn_k": k,
             "target_idx": target_idx,
             "distractor_idx": distractor_idx,
+            "bank_key": bank_key,
             "num_regions": len(bank_regions),
+            "bank_scope": bank_scope,
             "node_table": node_table,
             "checkpoint_load_info": getattr(model, "load_info", {}),
         },

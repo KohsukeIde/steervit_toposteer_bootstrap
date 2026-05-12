@@ -25,6 +25,41 @@ def record_image_key(record: dict[str, Any]) -> str:
         return f"path:{image_path}"
     return f"id:{record.get('id', 'unknown')}"
 
+def index_region_bank(rows: list[dict[str, Any]], key_field: str | None = None) -> dict[str, Any]:
+    if key_field is not None:
+        return {str(row.get(key_field)): row for row in rows}
+
+    by_image_key: dict[str, dict[str, Any]] = {}
+    by_pair_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row.get("image_key") is not None:
+            by_image_key[str(row.get("image_key"))] = row
+        if row.get("pair_id") is not None:
+            by_pair_id[str(row.get("pair_id"))] = row
+        elif row.get("id") is not None:
+            by_pair_id[str(row.get("id"))] = row
+    return {"by_image_key": by_image_key, "by_pair_id": by_pair_id}
+
+
+def resolve_bank_entry(pair_record: dict[str, Any], image_bank: dict[str, Any] | None = None, pair_bank: dict[str, dict[str, Any]] | None = None) -> tuple[str | None, dict[str, Any] | None]:
+    pair_id = str(pair_record.get("id"))
+    if pair_bank is not None and pair_id in pair_bank:
+        return f"pair:{pair_id}", pair_bank[pair_id]
+
+    if image_bank is None:
+        return None, None
+
+    if "by_pair_id" in image_bank or "by_image_key" in image_bank:
+        by_pair = image_bank.get("by_pair_id", {}) or {}
+        by_image = image_bank.get("by_image_key", {}) or {}
+        if pair_id in by_pair:
+            return f"pair:{pair_id}", by_pair[pair_id]
+        image_key = record_image_key(pair_record)
+        return f"image:{image_key}", by_image.get(image_key)
+
+    image_key = record_image_key(pair_record)
+    return f"image:{image_key}", image_bank.get(image_key)
+
 
 def masked_token_pool(token_features: torch.Tensor, patch_masks: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """

@@ -1,0 +1,21 @@
+seed: 42
+device: "cuda"
+
+topology:
+  gate_factor: 1.0
+  ks: [3, 5, 10]
+  prompt_batch_size: 16
+  local_overlap_threshold: 0.05
+  far_overlap_threshold: 0.0
+  patch_local_threshold: 0.25
+  patch_far_threshold: 0.0
+  include_rank_correlation: true
+  max_regions_per_image: 24
+  figure_knn_k: 5
+  bootstrap_samples: 4000
+  bootstrap_ci: 0.95
+  bootstrap_metric_keys:
+    - entity_pos_neg_localized_edit_diff_k5
+    - entity_pos_neg_neighbor_flip_rate_k5_local
+    - entity_pos_neg_neighbor_flip_rate_k5_far
+    - patch_pos_neg_localized_edit_diff_k5
