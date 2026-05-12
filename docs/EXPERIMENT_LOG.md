@@ -890,6 +890,137 @@ Next:
 2. Try CF only on the hard subset, with a lower margin or soft/listwise weighting.
 3. Add an error browser for locked color failures before changing architecture.
 
+## 2026-05-12 Topology Rearrangement Probe
+
+### Goal
+
+Check whether the current color-attribute results support the LensGraph claim that prompts edit local neighborhood topology, rather than only improving flip accuracy.
+
+The fixed checkpoints are:
+
+| Name | Checkpoint |
+| --- | --- |
+| released | `/home/cvrt/.cache/huggingface/hub/models--JonaRuthardt--SteerViT/snapshots/cdc29ddb5ddb8cfb6c0194c461eba14309b5afc7/steervit_dinov2_base.pth` |
+| warm_refseg final | `runs/warm_refseg_phrasecut_locked_color_5k/checkpoint_final.pt` |
+
+### Implementation
+
+Added topology probe utilities:
+
+| Path | Purpose |
+| --- | --- |
+| `tools/build_phrasecut_region_bank.py` | Groups PhraseCut records into per-image region banks. |
+| `eval/topology_rearrangement.py` | Measures prompt-conditioned kNN rearrangement for entity and patch tokens. |
+| `tools/render_lensgraph_figure.py` | Renders prompt-off / prompt-A / prompt-B entity graphs. |
+| `src/toposteer/evaluation/topology.py` | Shared topology metrics and pooling helpers. |
+
+Also fixed `record_image_key(...)` so locked flip records resolve `meta.left_meta.image_id`, and added direct target/distractor entity metrics.
+
+Verification:
+
+```text
+compileall OK
+pytest: 15 passed
+```
+
+### Region Bank
+
+Command:
+
+```bash
+.venv/bin/python tools/build_phrasecut_region_bank.py \
+  --input-manifest data/processed/phrasecut_full/manifest_existing_all_splits.jsonl \
+  --output-jsonl data/processed/phrasecut_full/region_bank_existing_all_splits.jsonl \
+  --summary-json data/processed/phrasecut_full/region_bank_existing_all_splits_summary.json \
+  --source phrasecut \
+  --require-existing-image \
+  --require-existing-mask
+```
+
+Result:
+
+| Metric | Count |
+| --- | ---: |
+| image banks | 5,516 |
+| regions | 34,670 |
+| mean regions/image | 6.29 |
+| max regions/image | 32 |
+
+### Negative Control
+
+Gate `0.0` on locked color dev produces zero prompt A/B topology difference for both released and warm_refseg. This confirms the probe is measuring gate-controlled prompt effects, not manifest or region-bank noise.
+
+| Run | Entity localized diff@5 | Patch localized diff@5 |
+| --- | ---: | ---: |
+| released gate 0 dev | 0.0000 | 0.0000 |
+| warm_refseg gate 0 dev | 0.0000 | 0.0000 |
+
+### Main Topology Results
+
+Metric definitions:
+
+- `localized diff@5`: pairwise mean of local neighbor flip rate minus far neighbor flip rate.
+- `target flip@5`: prompt A/B kNN flip rate for the target entity node only.
+- CIs below are bootstrap 95% intervals over pairs.
+
+| Run | Split | Entity localized diff@5 | Patch localized diff@5 | Entity target flip@5 |
+| --- | --- | ---: | ---: | ---: |
+| released | dev | 0.0036 [-0.0240, 0.0314] | 0.0773 [0.0648, 0.0903] | 0.1461 [0.1126, 0.1812] |
+| warm_refseg final | dev | 0.0199 [-0.0055, 0.0468] | 0.0563 [0.0438, 0.0691] | 0.1559 [0.1213, 0.1925] |
+| released | test | -0.0047 [-0.0212, 0.0125] | 0.0561 [0.0479, 0.0637] | 0.1624 [0.1420, 0.1831] |
+| warm_refseg final | test | -0.0225 [-0.0398, -0.0049] | 0.0411 [0.0345, 0.0479] | 0.1983 [0.1768, 0.2206] |
+
+Paired warm-refseg minus released deltas:
+
+| Split | Entity localized diff@5 | Patch localized diff@5 | Entity target flip@5 |
+| --- | ---: | ---: | ---: |
+| dev | +0.0164 [-0.0072, 0.0406] | -0.0211 [-0.0329, -0.0089] | +0.0098 [-0.0228, 0.0410] |
+| test | -0.0178 [-0.0364, -0.0000] | -0.0150 [-0.0221, -0.0077] | +0.0360 [0.0161, 0.0558] |
+
+### Figure Candidate
+
+Rendered:
+
+```text
+runs/lensgraph_figure_warm_refseg_blue_red_shorts/lensgraph_figure.png
+```
+
+Pair:
+
+```text
+blue shorts vs red shorts
+phrasecut_gold_eval_flip_phrasecut_2355525__2000785__vs__phrasecut_2355525__2354985
+```
+
+This is a strong qualitative example of entity-level target/distractor rearrangement, but it should be treated as an illustrative case rather than proof of the average effect.
+
+### Interpretation
+
+This is a partial GO, not a full LensGraph GO.
+
+What is supported:
+
+- Prompt-conditioned topology change is real: gate `0.0` removes it, gate `1.0` restores it.
+- Patch-token topology shows robust local rearrangement on both dev and test.
+- `warm_refseg final` increases direct target-entity kNN flip@5 on locked color test.
+
+What is not yet supported:
+
+- Coarse PhraseCut entity graph editing is not cleanly localized on test.
+- `warm_refseg final` improves direct target movement, but also increases far/entity drift.
+- Entity pooling over all PhraseCut regions is noisier than patch-level topology for this benchmark.
+
+Updated hypothesis:
+
+SteerViT's color steering primarily edits dense patch-token topology. Positive-only warm refseg improves target-node sensitivity and readout calibration, but current PhraseCut region banks are too sparse/coarse to support the stronger claim that the whole entity graph is locally edited while far entities remain stable.
+
+Decision:
+
+- Keep `warm_refseg final` as the current best grounding checkpoint.
+- Keep topology probe as a diagnostic, but do not claim full LensGraph-style entity topology surgery yet.
+- Next topology job should build a tighter entity bank: same-object / same-category / color-bearing regions only, plus an error browser for failures.
+- Do not add topology loss or Franca until entity localization is cleaner.
+
 ## 2026-04-19: Locked color dev/test and train availability
 
 ### Goal

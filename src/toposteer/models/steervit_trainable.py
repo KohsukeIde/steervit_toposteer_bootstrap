@@ -27,7 +27,7 @@ class SteerViTTrainable(nn.Module):
     Thin wrapper around the public SteerViT release.
 
     Key idea:
-    - use the upstream checkpoint loader,
+    - use the upstream checkpoint loader or a TopoSteer wrapper checkpoint,
     - re-enable gradients only on modules we want to fine-tune,
     - expose a training-time forward path that returns patch logits and patch probabilities.
     """
@@ -55,16 +55,43 @@ class SteerViTTrainable(nn.Module):
 
         self.model = self._load_release_model(str(release_checkpoint), device=device)
         self.device_name = torch.device(device)
-        self.trainable_modules = tuple(trainable_modules or ("gated_cross_attn", "connector", "lin_seg_head"))
+        if trainable_modules is None:
+            trainable_modules = ("gated_cross_attn", "connector", "lin_seg_head")
+        self.trainable_modules = tuple(trainable_modules)
+        self.load_info: dict[str, object] = {
+            "wrapped_checkpoint": train_state is not None,
+            "checkpoint": checkpoint,
+            "base_checkpoint": str(release_checkpoint),
+        }
         self._freeze_all()
         if train_state is not None:
             missing, unexpected = self.load_state_dict(train_state["model_state_dict"], strict=False)
             if unexpected:
                 raise RuntimeError(f"Unexpected keys while loading training checkpoint: {unexpected[:20]}")
+            self.load_info["missing_keys"] = list(missing)
+            self.load_info["unexpected_keys"] = list(unexpected)
             if missing:
                 # Missing keys are acceptable only for forward-compatible additions. Surface a compact warning.
                 print({"training_checkpoint_missing_keys": missing[:20], "num_missing": len(missing)})
         self._unfreeze_requested_modules()
+
+    @classmethod
+    def from_any_checkpoint(
+        cls,
+        checkpoint: str,
+        device: str | torch.device = "cpu",
+        trainable_modules: Iterable[str] | None = None,
+        base_checkpoint: str | None = None,
+        strict: bool = False,
+    ) -> "SteerViTTrainable":
+        if strict:
+            raise ValueError("Strict wrapper checkpoint loading is not supported by SteerViTTrainable.")
+        return cls(
+            checkpoint=checkpoint,
+            device=device,
+            trainable_modules=trainable_modules,
+            base_checkpoint=base_checkpoint,
+        )
 
     @staticmethod
     def _load_train_checkpoint_if_needed(checkpoint: str) -> dict | None:

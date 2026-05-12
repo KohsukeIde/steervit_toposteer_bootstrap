@@ -295,7 +295,7 @@ def main() -> None:
     if not freeze_cfg.get("text_model", True):
         trainable_modules.append("text_model")
 
-    model = SteerViTTrainable(
+    model = SteerViTTrainable.from_any_checkpoint(
         checkpoint=args.checkpoint,
         base_checkpoint=args.base_checkpoint,
         device=cfg.get("device", "cuda"),
@@ -303,6 +303,7 @@ def main() -> None:
     )
     model.set_gate_factor(train_gate_factor)
     transform = model.get_transforms()
+    write_json(output_dir / "checkpoint_load_info.json", getattr(model, "load_info", {}))
 
     family_whitelist = cfg.get("data", {}).get("family_whitelist")
     train_ds = UnifiedRefExpDataset(

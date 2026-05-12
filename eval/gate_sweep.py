@@ -120,13 +120,14 @@ def main() -> None:
     output_dir = ensure_dir(args.output_dir)
     overlay_dir = ensure_dir(output_dir / "overlays")
 
-    model = SteerViTTrainable(
+    model = SteerViTTrainable.from_any_checkpoint(
         checkpoint=args.checkpoint,
         base_checkpoint=args.base_checkpoint,
         device=cfg.get("device", "cuda"),
         trainable_modules=(),
     )
     transform = model.get_transforms()
+    write_json(output_dir / "checkpoint_load_info.json", getattr(model, "load_info", {}))
 
     dataset = UnifiedRefExpDataset(
         manifest_path=args.manifest,

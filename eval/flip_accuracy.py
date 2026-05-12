@@ -18,6 +18,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compute flip accuracy on a paired manifest.")
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--base-checkpoint",
+        default=None,
+        help="Required when --checkpoint is a TopoSteer training checkpoint with model_state_dict.",
+    )
     parser.add_argument("--gate-factor", type=float, default=1.0)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=4)
@@ -26,7 +31,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    model = SteerViTTrainable(args.checkpoint, device=args.device, trainable_modules=())
+    model = SteerViTTrainable.from_any_checkpoint(
+        args.checkpoint,
+        base_checkpoint=args.base_checkpoint,
+        device=args.device,
+        trainable_modules=(),
+    )
     model.eval()
     model.set_gate_factor(args.gate_factor)
 

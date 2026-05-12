@@ -5,11 +5,37 @@ from .metrics import (
     heatmap_mass_gap,
     normalized_trapz_area,
 )
+from .topology import (
+    compute_rearrangement_metrics,
+    cosine_similarity_matrix,
+    entity_local_far_masks,
+    masked_token_pool,
+    neighbor_flip_rate_per_node,
+    neighbor_jaccard_per_node,
+    node_rank_to_target,
+    patch_local_far_masks,
+    pca_project_2d,
+    record_image_key,
+    spearman_rank_correlation_per_node,
+    topk_neighbor_indices,
+)
 
 __all__ = [
     "aggregate_scalar_metrics",
     "compute_binary_iou",
     "compute_flip_accuracy",
+    "compute_rearrangement_metrics",
+    "cosine_similarity_matrix",
+    "entity_local_far_masks",
     "heatmap_mass_gap",
+    "masked_token_pool",
+    "neighbor_flip_rate_per_node",
+    "neighbor_jaccard_per_node",
+    "node_rank_to_target",
     "normalized_trapz_area",
+    "patch_local_far_masks",
+    "pca_project_2d",
+    "record_image_key",
+    "spearman_rank_correlation_per_node",
+    "topk_neighbor_indices",
 ]
